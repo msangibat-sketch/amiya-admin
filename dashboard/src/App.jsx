@@ -38,7 +38,110 @@ function LoginScreen() {
   );
 }
 
-function OrderList({ onSelect }) {
+function NewOrderForm({ onCreated, onCancel }) {
+  const [form, setForm] = useState({
+    order_number: '',
+    child_name: '',
+    gender: 'girl',
+    tier: 'essential',
+    dedication_text: '',
+    photo_url: '',
+    recipient_name: '',
+    phone: '',
+    province: '',
+    city: '',
+    street_address: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  function update(field, value) {
+    setForm((f) => ({ ...f, [field]: value }));
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    const { error } = await supabase.from('orders').insert([{
+      ...form,
+      letter_variants: [], // filled in once you assign per-letter variants
+      status: 'new',
+    }]);
+    setSaving(false);
+    if (error) {
+      setError(error.message);
+    } else {
+      onCreated();
+    }
+  }
+
+  const inputStyle = { display: 'block', width: '100%', padding: 6, marginBottom: 10 };
+
+  return (
+    <form onSubmit={handleSubmit} style={{ maxWidth: 480 }}>
+      <h2>New Order</h2>
+
+      <label>Order number</label>
+      <input style={inputStyle} required value={form.order_number}
+             onChange={(e) => update('order_number', e.target.value)}
+             placeholder="e.g. ORD-0001" />
+
+      <label>Child's name</label>
+      <input style={inputStyle} required value={form.child_name}
+             onChange={(e) => update('child_name', e.target.value)} />
+
+      <label>Gender</label>
+      <select style={inputStyle} value={form.gender} onChange={(e) => update('gender', e.target.value)}>
+        <option value="girl">Girl</option>
+        <option value="boy">Boy</option>
+      </select>
+
+      <label>Tier</label>
+      <select style={inputStyle} value={form.tier} onChange={(e) => update('tier', e.target.value)}>
+        <option value="essential">Essential</option>
+        <option value="signature">Signature</option>
+        <option value="magical">Magical</option>
+      </select>
+
+      <label>Dedication text</label>
+      <textarea style={{ ...inputStyle, height: 100 }} value={form.dedication_text}
+                onChange={(e) => update('dedication_text', e.target.value)} />
+
+      <label>Photo URL (e.g. an ImgBB link)</label>
+      <input style={inputStyle} value={form.photo_url}
+             onChange={(e) => update('photo_url', e.target.value)} />
+
+      <h3>Shipping</h3>
+      <label>Recipient name</label>
+      <input style={inputStyle} value={form.recipient_name}
+             onChange={(e) => update('recipient_name', e.target.value)} />
+
+      <label>Phone</label>
+      <input style={inputStyle} value={form.phone}
+             onChange={(e) => update('phone', e.target.value)} />
+
+      <label>Province</label>
+      <input style={inputStyle} value={form.province}
+             onChange={(e) => update('province', e.target.value)} />
+
+      <label>City</label>
+      <input style={inputStyle} value={form.city}
+             onChange={(e) => update('city', e.target.value)} />
+
+      <label>Street address</label>
+      <input style={inputStyle} value={form.street_address}
+             onChange={(e) => update('street_address', e.target.value)} />
+
+      {error && <p style={{ color: 'red' }}>{error}</p>}
+
+      <button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Create Order'}</button>{' '}
+      <button type="button" onClick={onCancel}>Cancel</button>
+    </form>
+  );
+}
+
+function OrderList({ onSelect, onNewOrder }) {
   const [orders, setOrders] = useState([]);
   const [filter, setFilter] = useState('all');
 
@@ -55,13 +158,14 @@ function OrderList({ onSelect }) {
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
         <select value={filter} onChange={(e) => setFilter(e.target.value)}>
           <option value="all">All statuses</option>
           {STATUS_FLOW.map((s) => (
             <option key={s} value={s}>{s}</option>
           ))}
         </select>
+        <button onClick={onNewOrder}>+ New Order</button>
       </div>
       <table width="100%" cellPadding={8} style={{ borderCollapse: 'collapse' }}>
         <thead>
@@ -179,6 +283,7 @@ function OrderDetail({ order, onBack, onUpdated }) {
 export default function App() {
   const [session, setSession] = useState(null);
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const [showNewOrder, setShowNewOrder] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
@@ -194,14 +299,19 @@ export default function App() {
   return (
     <div style={{ maxWidth: 900, margin: '40px auto', fontFamily: 'sans-serif' }}>
       <h1>Amiya Publishing — Orders</h1>
-      {selectedOrder ? (
+      {showNewOrder ? (
+        <NewOrderForm
+          onCreated={() => { setShowNewOrder(false); setRefreshKey((k) => k + 1); }}
+          onCancel={() => setShowNewOrder(false)}
+        />
+      ) : selectedOrder ? (
         <OrderDetail
           order={selectedOrder}
           onBack={() => setSelectedOrder(null)}
           onUpdated={() => { setRefreshKey((k) => k + 1); setSelectedOrder(null); }}
         />
       ) : (
-        <OrderList key={refreshKey} onSelect={setSelectedOrder} />
+        <OrderList key={refreshKey} onSelect={setSelectedOrder} onNewOrder={() => setShowNewOrder(true)} />
       )}
     </div>
   );
