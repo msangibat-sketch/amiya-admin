@@ -12,12 +12,20 @@ baked into the deploy image, or synced from cloud storage on startup
 """
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import os
 import uuid
 
 app = FastAPI(title="Amiya Book Generator")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 ASSET_ROOT = os.environ.get("ASSET_ROOT", "/app/assets")
 OUTPUT_ROOT = os.environ.get("OUTPUT_ROOT", "/app/output")
