@@ -1,9 +1,0 @@
-fastapi==0.115.0
-uvicorn[standard]==0.32.0
-pydantic==2.9.2
-pymupdf==1.24.11
-pillow==10.4.0
-numpy==2.1.2
-requests==2.32.3
-python-multipart==0.0.12
-openpyxl==3.1.5
