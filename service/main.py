@@ -22,7 +22,7 @@ app = FastAPI(title="Amiya Book Generator")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # tighten this to your Netlify URL once things are stable
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -54,16 +54,6 @@ class GenerateResponse(BaseModel):
     status: str
 
 
-def sync_assets():
-    """
-    Placeholder: sync the spread/letter/font library from wherever it's
-    canonically stored (Google Drive, S3, etc) onto local disk, if not
-    already present. Assets change rarely, so this can just check a
-    version marker and skip if already up to date.
-    """
-    pass
-
-
 def download_photo(photo_url: str, dest_path: str):
     import requests
     r = requests.get(photo_url, timeout=30)
@@ -72,9 +62,51 @@ def download_photo(photo_url: str, dest_path: str):
         f.write(r.content)
 
 
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
+STORAGE_BUCKET = "generated-books"
+
+
+def upload_to_storage(local_path: str, storage_path: str) -> str:
+    """
+    Uploads a file to Supabase Storage via its REST API directly (no SDK
+    dependency needed) and returns the public URL. Requires SUPABASE_URL
+    and SUPABASE_SERVICE_KEY env vars to be set, and a public bucket named
+    'generated-books' to already exist in the Supabase project.
+    """
+    import requests
+    import mimetypes
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        raise RuntimeError("SUPABASE_URL / SUPABASE_SERVICE_KEY env vars are not set")
+
+    content_type = mimetypes.guess_type(local_path)[0] or "application/octet-stream"
+    upload_url = f"{SUPABASE_URL}/storage/v1/object/{STORAGE_BUCKET}/{storage_path}"
+
+    with open(local_path, "rb") as f:
+        resp = requests.post(
+            upload_url,
+            headers={
+                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                "Content-Type": content_type,
+                "x-upsert": "true",  # overwrite if this path already exists
+            },
+            data=f.read(),
+            timeout=120,
+        )
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"Upload failed ({resp.status_code}): {resp.text}")
+
+    return f"{SUPABASE_URL}/storage/v1/object/public/{STORAGE_BUCKET}/{storage_path}"
+
+
+def zip_directory(dir_path: str, zip_path: str):
+    import shutil
+    shutil.make_archive(zip_path.replace(".zip", ""), "zip", dir_path)
+
+
 @app.on_event("startup")
 def startup():
-    sync_assets()
     os.makedirs(OUTPUT_ROOT, exist_ok=True)
 
 
@@ -118,13 +150,21 @@ def generate_book(req: GenerateRequest):
     )
     digital_dir = split_for_digital(print_pdf_path, job_dir)
 
-    # TODO: upload print_pdf_path and digital_dir to real storage (S3,
-    # Supabase storage, etc) and return their public URLs. For now,
-    # returning local paths so this is testable end-to-end first.
+    # zip the digital pages into one file, then upload both to storage
+    digital_zip_path = os.path.join(job_dir, "digital_pages.zip")
+    zip_directory(digital_dir, digital_zip_path)
+
+    print_pdf_url = upload_to_storage(
+        print_pdf_path, f"{req.order_number}/{job_id}/print_ready.pdf"
+    )
+    digital_pages_url = upload_to_storage(
+        digital_zip_path, f"{req.order_number}/{job_id}/digital_pages.zip"
+    )
+
     return GenerateResponse(
         order_number=req.order_number,
-        print_pdf_url=print_pdf_path,
-        digital_pages_url=digital_dir,
+        print_pdf_url=print_pdf_url,
+        digital_pages_url=digital_pages_url,
         status="ready",
     )
 
