@@ -1,19 +1,19 @@
 """
-Orchestrates the full book assembly using the modules we already built and
-validated (hello, dedication, intro, gathering, letters+accumulation,
-farewell, full-name reveal).
-
-IMPORTANT -- before this runs outside the original test sandbox:
-Each module in this package currently has some hardcoded paths (asset
-folders, font locations) left over from testing. Before deploying, replace
-those with references to ASSET_ROOT (passed in here) so the service can
-find spreads/letters/fonts wherever they're actually stored on the server.
-This file shows the correct *order of operations* -- wiring the exact
-path config is the remaining mechanical step.
+Orchestrates the full book assembly: hello -> dedication -> intro ->
+gathering -> letter sequence (with accumulation) -> farewell ->
+full-name reveal -> ending.
 """
 
 import fitz
 import os
+
+from .hello import build_hello_test
+from .spread2_dedication import build_spread2
+from .spread3_intro import build_spread3
+from .spread4_gathering import build_spread4
+from .letters import build_letter_sequence
+from .farewell import build_farewell
+from .full_name_reveal import build_full_name_reveal
 
 
 def stitch_all(asset_root, name, gender, dedication_text, photo_path,
@@ -24,58 +24,83 @@ def stitch_all(asset_root, name, gender, dedication_text, photo_path,
 
     Returns path to the finished print-ready spread PDF.
     """
-    out_doc = fitz.open()
+    os.makedirs(out_dir, exist_ok=True)
+    spreads_dir = os.path.join(asset_root, "spreads")
 
-    # 1. Hello spread (gender variant, name auto-fit)
-    # from .hello import build_hello_test
-    # build_hello_test(f"{asset_root}/spreads/hello_{gender}.pdf", name, f"{out_dir}/01_hello.pdf")
+    piece_paths = []
+
+    # 1. Hello spread
+    print(f"[{name}] building hello spread...")
+    hello_out = os.path.join(out_dir, "01_hello.pdf")
+    build_hello_test(os.path.join(spreads_dir, f"hello_{gender}.pdf"), name, hello_out)
+    piece_paths.append(hello_out)
+    print(f"[{name}] hello done -> {hello_out} (exists: {os.path.exists(hello_out)})")
 
     # 2. Dedication spread (photo + custom text)
-    # from .spread2_dedication import build_spread2
-    # build_spread2(f"{asset_root}/spreads/dedication_{gender}.pdf", photo_path,
-    #               dedication_text, f"{out_dir}/02_dedication.pdf")
+    print(f"[{name}] building dedication spread...")
+    dedication_out = os.path.join(out_dir, "02_dedication.pdf")
+    build_spread2(os.path.join(spreads_dir, f"dedication_{gender}.pdf"),
+                  photo_path, dedication_text, dedication_out)
+    piece_paths.append(dedication_out)
+    print(f"[{name}] dedication done -> {dedication_out} (exists: {os.path.exists(dedication_out)})")
 
     # 3. Intro spread (gender pronoun swap only)
-    # from .spread3_intro import build_spread3
-    # build_spread3(f"{asset_root}/spreads/intro_{gender}.pdf", gender, f"{out_dir}/03_intro.pdf")
+    print(f"[{name}] building intro spread...")
+    intro_out = os.path.join(out_dir, "03_intro.pdf")
+    build_spread3(os.path.join(spreads_dir, f"intro_{gender}.pdf"), gender, intro_out)
+    piece_paths.append(intro_out)
+    print(f"[{name}] intro done -> {intro_out} (exists: {os.path.exists(intro_out)})")
 
-    # 4. Gathering spread (no text variation, just gender art)
-    # from .spread4_gathering import build_spread4
-    # build_spread4(f"{asset_root}/spreads/gathering_{gender}.pdf", f"{out_dir}/04_gathering.pdf")
+    # 4. Gathering spread (art varies by gender, text is fixed)
+    print(f"[{name}] building gathering spread...")
+    gathering_out = os.path.join(out_dir, "04_gathering.pdf")
+    build_spread4(os.path.join(spreads_dir, f"gathering_{gender}.pdf"), gathering_out)
+    piece_paths.append(gathering_out)
+    print(f"[{name}] gathering done -> {gathering_out} (exists: {os.path.exists(gathering_out)})")
 
     # 5. Letter sequence: meet/give pairs + accumulation garland + captions
-    # from .letters import build_letter_sequence
-    # letter_pages = build_letter_sequence(asset_root, letter_variants, gender, f"{out_dir}/letters")
+    print(f"[{name}] building letter sequence ({len(letter_variants)} letters)...")
+    letter_dir = os.path.join(out_dir, "letters")
+    letter_pages = build_letter_sequence(asset_root, letter_variants, gender, letter_dir)
+    piece_paths.extend(letter_pages)
+    print(f"[{name}] letter sequence done -> {len(letter_pages)} pages")
 
     # 6. Farewell spread (gender animal + name)
-    # from .farewell import build_farewell
-    # build_farewell(f"{asset_root}/spreads/farewell_{gender}.pdf", name, gender,
-    #                 f"{out_dir}/06_farewell.pdf")
+    print(f"[{name}] building farewell spread...")
+    farewell_out = os.path.join(out_dir, "06_farewell.pdf")
+    build_farewell(os.path.join(spreads_dir, f"farewell_{gender}.pdf"), name, gender, farewell_out)
+    piece_paths.append(farewell_out)
+    print(f"[{name}] farewell done -> {farewell_out} (exists: {os.path.exists(farewell_out)})")
 
     # 7. Full name reveal (10-slot centered, night scene)
-    # from .full_name_reveal import build_full_name_reveal
-    # build_full_name_reveal(f"{asset_root}/spreads/night_scene.pdf", letter_variants,
-    #                         f"{out_dir}/07_reveal.pdf")
+    print(f"[{name}] building full name reveal...")
+    reveal_out = os.path.join(out_dir, "07_reveal.pdf")
+    reveal_sequence = [
+        (lv['key'], lv['case'], lv['variant'],
+         os.path.join(asset_root, "letters", f"letter-{lv['key']}-{lv['case']}-{lv['variant']}.png"))
+        for lv in letter_variants
+    ]
+    build_full_name_reveal(os.path.join(spreads_dir, "night_scene.pdf"), reveal_sequence, reveal_out)
+    piece_paths.append(reveal_out)
+    print(f"[{name}] reveal done -> {reveal_out} (exists: {os.path.exists(reveal_out)})")
 
     # 8. Ending spread (fixed, no variation)
-    # ending_path = f"{asset_root}/spreads/ending.pdf"
+    piece_paths.append(os.path.join(spreads_dir, "ending.pdf"))
+
+    print(f"[{name}] TOTAL PIECES: {len(piece_paths)}")
+    for p in piece_paths:
+        print(f"  - {p} (exists: {os.path.exists(p)})")
 
     # 9. Stitch all pieces in order into one continuous spread PDF
-    piece_paths = [
-        f"{out_dir}/01_hello.pdf",
-        f"{out_dir}/02_dedication.pdf",
-        f"{out_dir}/03_intro.pdf",
-        f"{out_dir}/04_gathering.pdf",
-        # *letter_pages,
-        f"{out_dir}/06_farewell.pdf",
-        f"{out_dir}/07_reveal.pdf",
-        f"{asset_root}/spreads/ending.pdf",
-    ]
+    out_doc = fitz.open()
     for p in piece_paths:
         if os.path.exists(p):
             src = fitz.open(p)
             out_doc.insert_pdf(src, from_page=0, to_page=0)
+        else:
+            raise FileNotFoundError(f"Expected assembled piece missing: {p}")
 
+    print(f"[{name}] final page count before save: {len(out_doc)}")
     print_pdf_path = os.path.join(out_dir, "print_ready.pdf")
     out_doc.save(print_pdf_path)
     return print_pdf_path
