@@ -38,6 +38,85 @@ function LoginScreen() {
   );
 }
 
+const CYRILLIC_MAP = {
+  'А':'a','Б':'b','В':'v','Г':'g','Д':'d','Е':'ye','Ё':'yo','Ж':'j','З':'z',
+  'И':'i','Й':'iy','К':'k','Л':'l','М':'m','Н':'n','О':'o','Ө':'q','П':'p',
+  'Р':'r','С':'s','Т':'t','У':'u','Ү':'w','Ф':'f','Х':'kh','Ц':'ts','Ч':'ch',
+  'Ш':'sh','Щ':'sch','Ь':',','Э':'e','Ю':'yu','Я':'ya'
+};
+
+function parseNameTokens(raw) {
+  const tokens = [];
+  const keyOccCount = {};
+  let afterHyphenOrStart = true;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === '-') { tokens.push({ type: 'hyphen' }); afterHyphenOrStart = true; continue; }
+    const upper = ch.toUpperCase();
+    if (!CYRILLIC_MAP[upper]) continue;
+    const key = CYRILLIC_MAP[upper];
+    const letterCase = afterHyphenOrStart ? 'u' : 'l';
+    afterHyphenOrStart = false;
+    const kc = key + '-' + letterCase;
+    keyOccCount[kc] = (keyOccCount[kc] || 0) + 1;
+    tokens.push({ type: 'letter', char: upper, key, case: letterCase, occIndex: keyOccCount[kc] });
+  }
+  return tokens;
+}
+
+function LetterVariantPicker({ tokens, variants, onChange }) {
+  const letters = tokens.filter((t) => t.type === 'letter');
+  if (!letters.length) return null;
+
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <label>Letter variants</label>
+      <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>
+            <th style={{ padding: '4px 8px 4px 0' }}>Letter</th>
+            <th>Key</th>
+            <th>Case</th>
+            <th>Occurrence</th>
+            <th>Variant</th>
+          </tr>
+        </thead>
+        <tbody>
+          {letters.map((t, i) => {
+            const occLabel = ['', '1st', '2nd', '3rd'][t.occIndex] || `${t.occIndex}th`;
+            return (
+              <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
+                <td style={{ padding: '6px 8px 6px 0', fontSize: 16, fontWeight: 600 }}>{t.char}</td>
+                <td style={{ fontFamily: 'monospace', color: '#777' }}>{t.key}-{t.case}</td>
+                <td>{t.case === 'u' ? 'Upper' : 'Lower'}</td>
+                <td style={{ color: '#777' }}>{occLabel}</td>
+                <td>
+                  {[1, 2, 3, 4, 5].map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => onChange(i, v)}
+                      style={{
+                        width: 28, height: 28, marginRight: 4, borderRadius: 6,
+                        border: '1px solid #ccc',
+                        background: variants[i] === v ? '#333' : '#fff',
+                        color: variants[i] === v ? '#fff' : '#333',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function NewOrderForm({ onCreated, onCancel }) {
   const [form, setForm] = useState({
     order_number: '',
@@ -52,20 +131,51 @@ function NewOrderForm({ onCreated, onCancel }) {
     city: '',
     street_address: '',
   });
+  const [tokens, setTokens] = useState([]);
+  const [variantValues, setVariantValues] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
   function update(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
+    if (field === 'child_name') {
+      const newTokens = parseNameTokens(value);
+      const oldLetters = tokens.filter((t) => t.type === 'letter');
+      const newLetters = newTokens.filter((t) => t.type === 'letter');
+      const newVariants = newLetters.map((t) => {
+        const oldIdx = oldLetters.findIndex(
+          (o) => o.key === t.key && o.case === t.case && o.occIndex === t.occIndex
+        );
+        return oldIdx !== -1 && variantValues[oldIdx] !== undefined ? variantValues[oldIdx] : 1;
+      });
+      setTokens(newTokens);
+      setVariantValues(newVariants);
+    }
+  }
+
+  function setVariant(idx, val) {
+    setVariantValues((v) => {
+      const copy = [...v];
+      copy[idx] = val;
+      return copy;
+    });
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
     setSaving(true);
     setError(null);
+
+    const letters = tokens.filter((t) => t.type === 'letter');
+    const letter_variants = letters.map((t, i) => ({
+      key: t.key,
+      case: t.case,
+      variant: String(variantValues[i] || 1),
+    }));
+
     const { error } = await supabase.from('orders').insert([{
       ...form,
-      letter_variants: [], // filled in once you assign per-letter variants
+      letter_variants,
       status: 'new',
     }]);
     setSaving(false);
@@ -90,6 +200,9 @@ function NewOrderForm({ onCreated, onCancel }) {
       <label>Child's name</label>
       <input style={inputStyle} required value={form.child_name}
              onChange={(e) => update('child_name', e.target.value)} />
+
+      <LetterVariantPicker tokens={tokens} variants={variantValues} onChange={setVariant} />
+
 
       <label>Gender</label>
       <select style={inputStyle} value={form.gender} onChange={(e) => update('gender', e.target.value)}>
