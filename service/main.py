@@ -138,6 +138,9 @@ def generate_book(req: GenerateRequest):
     photo_path = os.path.join(job_dir, "photo.jpg")
     download_photo(req.photo_url, photo_path)
 
+    if not req.letter_variants:
+        raise HTTPException(400, "letter_variants is empty -- cannot generate a book without knowing which letter art to use for each letter of the name")
+
     from assembly.stitch import stitch_all, split_for_digital
 
     print_pdf_path = stitch_all(
