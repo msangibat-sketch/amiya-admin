@@ -87,6 +87,7 @@ def upload_to_storage(local_path: str, storage_path: str) -> str:
         resp = requests.post(
             upload_url,
             headers={
+                "apikey": SUPABASE_SERVICE_KEY,
                 "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
                 "Content-Type": content_type,
                 "x-upsert": "true",  # overwrite if this path already exists
