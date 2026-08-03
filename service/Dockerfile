@@ -11,7 +11,7 @@ COPY . .
 
 # Download the compressed asset library (spreads/letters/fonts/caption data)
 # from the GitHub Release, since it's too large to commit directly to the repo.
-RUN wget -q "https://github.com/msangibat-sketch/amiya-admin/releases/download/assets-v3/amiya-assets-20260802T180509Z-1-001.zip" -O /tmp/assets.zip \
+RUN wget -q "https://github.com/msangibat-sketch/amiya-admin/releases/download/assets-v3/amiya-assets-20260803T101220Z-1-001.zip" -O /tmp/assets.zip \
     && mkdir -p /app/assets \
     && unzip -q /tmp/assets.zip -d /tmp/assets_extracted \
     && (cp -r /tmp/assets_extracted/amiya-assets/* /app/assets/ || cp -r /tmp/assets_extracted/*/* /app/assets/) \
