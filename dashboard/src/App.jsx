@@ -655,6 +655,63 @@ function LetterVariantsSection({ order, animalNames }) {
   );
 }
 
+// Editing the child's name. Letter variants are picked per letter of the
+// name, so a new name clears them -- they must be picked again (and the
+// book regenerated, if it was already generated with the old name).
+function ChildNameSection({ order, onChanged }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(order.child_name || '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const hadVariants = (order.letter_variants || []).length > 0;
+  const changed = name.trim() !== order.child_name;
+
+  async function handleSave() {
+    const newName = name.trim();
+    if (!newName) { setError('Name can\'t be empty'); return; }
+    if (!parseNameTokens(newName).some((t) => t.type === 'letter')) {
+      setError('Use Cyrillic letters only'); return;
+    }
+    setSaving(true);
+    setError(null);
+    const patch = { child_name: newName, letter_variants: [] };
+    const { error: err } = await supabase.from('orders').update(patch).eq('id', order.id);
+    setSaving(false);
+    if (err) { setError(err.message); return; }
+    setEditing(false);
+    onChanged(patch);
+  }
+
+  if (!editing) {
+    return (
+      <p style={{ margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <strong style={{ color: THEME.textMid }}>Child name:</strong> {order.child_name}
+        <Button variant="ghost" onClick={() => { setName(order.child_name || ''); setEditing(true); }}>Edit</Button>
+      </p>
+    );
+  }
+
+  return (
+    <div style={{ margin: '0 0 12px', padding: 14, borderRadius: 14, background: THEME.cream2, maxWidth: 400 }}>
+      <label style={labelStyle}>Child name</label>
+      <input style={{ ...inputStyle, marginBottom: 8 }} value={name} maxLength={30}
+             onChange={(e) => setName(e.target.value)} autoFocus />
+      {changed && hadVariants && (
+        <p style={{ fontSize: 12, color: THEME.danger, margin: '0 0 8px' }}>
+          Saving a new name clears the letter variants — you'll pick them again for the new letters.
+          {order.print_pdf_url ? ' Regenerate the book and cover afterwards.' : ''}
+        </p>
+      )}
+      {error && <p style={{ fontSize: 12, color: THEME.danger, margin: '0 0 8px' }}>{error}</p>}
+      <div style={{ display: 'flex', gap: 10 }}>
+        <Button onClick={handleSave} disabled={saving || !changed}>{saving ? 'Saving…' : 'Save name'}</Button>
+        <Button variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
+      </div>
+    </div>
+  );
+}
+
 function DedicationSection({ order }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(order.dedication_text || '');
@@ -938,7 +995,7 @@ function FinancialsPanel({ order }) {
   );
 }
 
-function OrderDetail({ order, onBack, onUpdated, animalNames }) {
+function OrderDetail({ order, onBack, onUpdated, onChanged, animalNames }) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState(null);
   const [generatingCover, setGeneratingCover] = useState(false);
@@ -1041,8 +1098,13 @@ function OrderDetail({ order, onBack, onUpdated, animalNames }) {
 
       <div style={{ ...card, display: 'flex', gap: 40 }}>
         <div style={{ flex: 1 }}>
+          <ChildNameSection order={order} onChanged={onChanged} />
           <p style={{ margin: '0 0 8px' }}><strong style={{ color: THEME.textMid }}>Gender:</strong> {order.gender}</p>
           <p style={{ margin: '0 0 8px' }}><strong style={{ color: THEME.textMid }}>Tier:</strong> {order.tier}</p>
+          {order.promo_code && (
+            <p style={{ margin: '0 0 8px' }}><strong style={{ color: THEME.textMid }}>Code used:</strong> {order.promo_code}
+              {order.discount_amount != null && <span style={{ color: THEME.textSoft }}> (−₮{Number(order.discount_amount).toLocaleString('en-US')})</span>}</p>
+          )}
           <p style={{ margin: '0 0 8px' }}><strong style={{ color: THEME.textMid }}>Email:</strong> {order.email || '—'}</p>
           <p style={{ margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
             <strong style={{ color: THEME.textMid }}>Status:</strong>
@@ -1098,11 +1160,309 @@ function OrderDetail({ order, onBack, onUpdated, animalNames }) {
   );
 }
 
+// =====================================================================
+// Codes & gift cards
+// Reads/writes the promo_codes table that the checkout site uses.
+//   type 'percent'   -> discount codes you create here
+//   type 'gift_card' -> bought on the website (or made here by hand)
+// =====================================================================
+const SITE_URL = 'https://amiyapublishing.com';
+const TIER_SHORT = { signature: 'Signature', premium: 'Premium' };
+const CODE_STATUS = {
+  active:   { label: 'Active',   color: '#4A8F5C' },
+  used:     { label: 'Used',     color: THEME.textSoft },
+  disabled: { label: 'Disabled', color: THEME.danger },
+  pending_payment: { label: 'Not paid', color: THEME.gold },
+};
+// Same alphabet as the website: no 0/O, 1/I/L, so printed codes can't be mistyped
+const GIFT_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+function newGiftCode() {
+  const bytes = new Uint8Array(6);
+  crypto.getRandomValues(bytes);
+  return 'AMIYA-GIFT-' + Array.from(bytes, (b) => GIFT_ALPHABET[b % GIFT_ALPHABET.length]).join('');
+}
+const thStyle = { padding: '10px 14px', color: THEME.textMid, fontSize: 12, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', textAlign: 'left' };
+const tdStyle = { padding: '12px 14px', fontSize: 13, verticalAlign: 'top' };
+const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : '—');
+const fmtMnt = (n) => (n == null ? '—' : '₮' + Number(n).toLocaleString('en-US'));
+
+function CodeStatusPill({ status }) {
+  const st = CODE_STATUS[status] || { label: status, color: THEME.textSoft };
+  return (
+    <span style={{ display: 'inline-block', fontFamily: "'Comfortaa', cursive", fontWeight: 700, fontSize: 11,
+                   padding: '4px 12px', borderRadius: 100, background: `${st.color}1A`, color: st.color }}>
+      {st.label}
+    </span>
+  );
+}
+
+function NewDiscountCodeForm({ onCreated }) {
+  const [code, setCode] = useState('');
+  const [percent, setPercent] = useState('');
+  const [expires, setExpires] = useState('');
+  const [maxUses, setMaxUses] = useState('');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function handleCreate(e) {
+    e.preventDefault();
+    const c = code.trim().toUpperCase().replace(/\s+/g, '');
+    const pct = Number(percent);
+    if (!/^[A-Z0-9-]{3,30}$/.test(c)) { setError('Code: 3–30 letters/numbers (Latin), no spaces'); return; }
+    if (!(pct >= 1 && pct <= 100)) { setError('Percent must be between 1 and 100'); return; }
+    if (maxUses !== '' && !(Number(maxUses) >= 1)) { setError('Max uses must be 1 or more, or empty for unlimited'); return; }
+    setSaving(true); setError(null);
+    const { error: err } = await supabase.from('promo_codes').insert([{
+      code: c,
+      type: 'percent',
+      percent: pct,
+      // the code works until the end of that day, Ulaanbaatar time
+      expires_at: expires ? `${expires}T23:59:59+08:00` : null,
+      max_uses: maxUses === '' ? null : Number(maxUses),
+      note: note.trim() || null,
+    }]);
+    setSaving(false);
+    if (err) { setError(err.code === '23505' ? 'That code already exists' : err.message); return; }
+    setCode(''); setPercent(''); setExpires(''); setMaxUses(''); setNote('');
+    onCreated();
+  }
+
+  return (
+    <form onSubmit={handleCreate} style={{ ...card, marginBottom: 20 }}>
+      <p style={{ ...heading, fontSize: 16, marginBottom: 14 }}>New discount code</p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0 14px' }}>
+        <div><label style={labelStyle}>Code</label>
+          <input style={{ ...inputStyle, textTransform: 'uppercase' }} value={code} onChange={(e) => setCode(e.target.value)} placeholder="NAMAR15" /></div>
+        <div><label style={labelStyle}>Percent off</label>
+          <input style={inputStyle} type="number" min="1" max="100" value={percent} onChange={(e) => setPercent(e.target.value)} placeholder="15" /></div>
+        <div><label style={labelStyle}>Last day (optional)</label>
+          <input style={inputStyle} type="date" value={expires} onChange={(e) => setExpires(e.target.value)} /></div>
+        <div><label style={labelStyle}>Max orders (optional)</label>
+          <input style={inputStyle} type="number" min="1" value={maxUses} onChange={(e) => setMaxUses(e.target.value)} placeholder="Unlimited" /></div>
+      </div>
+      <label style={labelStyle}>Note (optional)</label>
+      <input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Sarnai's Instagram followers" />
+      {error && <p style={{ color: THEME.danger, fontSize: 13, margin: '0 0 10px' }}>{error}</p>}
+      <Button type="submit" disabled={saving}>{saving ? 'Creating…' : 'Create code'}</Button>
+      <p style={{ fontSize: 12, color: THEME.textSoft, margin: '10px 0 0' }}>
+        Takes the percent off the book price (not the long-name fee). One code per order; customers can type it in any case.
+      </p>
+    </form>
+  );
+}
+
+function NewGiftCardForm({ onCreated }) {
+  const [tier, setTier] = useState('premium');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [created, setCreated] = useState(null);
+
+  async function handleCreate(e) {
+    e.preventDefault();
+    if (!from.trim() || !to.trim()) { setError('Fill in From and To'); return; }
+    setSaving(true); setError(null);
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const code = newGiftCode();
+      const { error: err } = await supabase.from('promo_codes').insert([{
+        code, type: 'gift_card', tier, status: 'active', max_uses: 1,
+        from_name: from.trim(), to_name: to.trim(),
+        activated_at: new Date().toISOString(),
+        note: note.trim() || 'Made in dashboard',
+      }]);
+      if (!err) {
+        setSaving(false); setCreated(code); setFrom(''); setTo(''); setNote('');
+        onCreated();
+        return;
+      }
+      if (err.code !== '23505') { setSaving(false); setError(err.message); return; }
+    }
+    setSaving(false); setError('Could not create a unique code, try again');
+  }
+
+  return (
+    <form onSubmit={handleCreate} style={{ ...card, marginBottom: 20 }}>
+      <p style={{ ...heading, fontSize: 16, marginBottom: 6 }}>Make a gift card by hand</p>
+      <p style={{ fontSize: 12, color: THEME.textSoft, margin: '0 0 14px' }}>
+        For giveaways or cards paid outside the website. Cards bought on the website appear below automatically.
+      </p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0 14px' }}>
+        <div><label style={labelStyle}>Package</label>
+          <select style={inputStyle} value={tier} onChange={(e) => setTier(e.target.value)}>
+            <option value="premium">Premium</option>
+            <option value="signature">Signature</option>
+          </select></div>
+        <div><label style={labelStyle}>From (Хэнээс)</label>
+          <input style={inputStyle} value={from} maxLength={40} onChange={(e) => setFrom(e.target.value)} /></div>
+        <div><label style={labelStyle}>To (Хэнд)</label>
+          <input style={inputStyle} value={to} maxLength={40} onChange={(e) => setTo(e.target.value)} /></div>
+      </div>
+      <label style={labelStyle}>Note (optional)</label>
+      <input style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Instagram giveaway October" />
+      {error && <p style={{ color: THEME.danger, fontSize: 13, margin: '0 0 10px' }}>{error}</p>}
+      <Button type="submit" disabled={saving}>{saving ? 'Creating…' : 'Create gift card'}</Button>
+      {created && (
+        <p style={{ fontSize: 13, margin: '12px 0 0' }}>
+          ✓ Created <strong>{created}</strong> —{' '}
+          <a href={`${SITE_URL}/?gift=${created}`} target="_blank" rel="noreferrer" style={{ color: THEME.terra, fontWeight: 600 }}>
+            open the card to download
+          </a>
+        </p>
+      )}
+    </form>
+  );
+}
+
+function CodesPage() {
+  const [view, setView] = useState('gift_card');
+  const [rows, setRows] = useState([]);
+  const [showUnpaid, setShowUnpaid] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [copied, setCopied] = useState(null);
+
+  useEffect(() => { load(); }, [view]);
+
+  async function load() {
+    const { data, error } = await supabase.from('promo_codes').select('*')
+      .eq('type', view).order('created_at', { ascending: false });
+    setLoadError(error ? error.message : null);
+    setRows(data || []);
+  }
+
+  async function setStatus(row, status) {
+    await supabase.from('promo_codes').update({ status }).eq('id', row.id);
+    load();
+  }
+
+  function copyLink(code) {
+    navigator.clipboard.writeText(`${SITE_URL}/?gift=${code}`).then(() => {
+      setCopied(code); setTimeout(() => setCopied(null), 2000);
+    });
+  }
+
+  const visible = rows.filter((r) => showUnpaid || r.status !== 'pending_payment');
+  const sold = rows.filter((r) => r.type === 'gift_card' && r.code && r.price_paid != null);
+  const soldTotal = sold.reduce((sum, r) => sum + (r.price_paid || 0), 0);
+  const tabBtn = (v, label) => (
+    <button type="button" onClick={() => setView(v)}
+            style={{ ...buttonStyle(view === v ? 'primary' : 'secondary'), padding: '9px 20px' }}>{label}</button>
+  );
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+        {tabBtn('gift_card', 'Gift cards')}
+        {tabBtn('percent', 'Discount codes')}
+      </div>
+
+      {loadError && (
+        <div style={{ ...card, marginBottom: 20, color: THEME.danger, fontSize: 13 }}>
+          Couldn't load codes: {loadError}. If it says "permission denied", run
+          <code> schema/migration_promo_codes_dashboard.sql</code> in Supabase's SQL editor.
+        </div>
+      )}
+
+      {view === 'percent' ? (
+        <>
+          <NewDiscountCodeForm onCreated={load} />
+          <div style={{ ...card, padding: 0, overflow: 'auto' }}>
+            <table width="100%" style={{ borderCollapse: 'collapse' }}>
+              <thead><tr style={{ background: THEME.cream2 }}>
+                <th style={thStyle}>Code</th><th style={thStyle}>Off</th><th style={thStyle}>Used</th>
+                <th style={thStyle}>Last day</th><th style={thStyle}>Status</th><th style={thStyle}>Note</th><th style={thStyle}></th>
+              </tr></thead>
+              <tbody>
+                {visible.map((r) => {
+                  const expired = r.expires_at && new Date(r.expires_at) <= new Date();
+                  return (
+                    <tr key={r.id} style={{ borderTop: `1px solid ${THEME.border}` }}>
+                      <td style={{ ...tdStyle, fontWeight: 700, fontFamily: 'monospace', fontSize: 14 }}>{r.code}</td>
+                      <td style={tdStyle}>{r.percent}%</td>
+                      <td style={tdStyle}>{r.used_count}{r.max_uses != null ? ` / ${r.max_uses}` : ''} orders</td>
+                      <td style={{ ...tdStyle, color: expired ? THEME.danger : THEME.text }}>
+                        {r.expires_at ? new Date(r.expires_at).toLocaleDateString() + (expired ? ' (ended)' : '') : 'No end'}
+                      </td>
+                      <td style={tdStyle}><CodeStatusPill status={r.status} /></td>
+                      <td style={{ ...tdStyle, color: THEME.textSoft, maxWidth: 200 }}>{r.note || ''}</td>
+                      <td style={tdStyle}>
+                        {r.status === 'active' && <Button variant="danger" onClick={() => setStatus(r, 'disabled')}>Turn off</Button>}
+                        {r.status === 'disabled' && <Button variant="secondary" onClick={() => setStatus(r, 'active')}>Turn on</Button>}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!visible.length && <tr><td colSpan={7} style={{ ...tdStyle, color: THEME.textSoft, textAlign: 'center', padding: 24 }}>No discount codes yet</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ ...card, marginBottom: 20, display: 'flex', gap: 40, flexWrap: 'wrap' }}>
+            <div><div style={{ fontSize: 12, color: THEME.textSoft, fontWeight: 700, textTransform: 'uppercase' }}>Sold on website</div>
+              <div style={{ ...heading, fontSize: 24, color: THEME.terra }}>{sold.length}</div></div>
+            <div><div style={{ fontSize: 12, color: THEME.textSoft, fontWeight: 700, textTransform: 'uppercase' }}>Total paid</div>
+              <div style={{ ...heading, fontSize: 24, color: THEME.terra }}>{fmtMnt(soldTotal)}</div></div>
+            <div><div style={{ fontSize: 12, color: THEME.textSoft, fontWeight: 700, textTransform: 'uppercase' }}>Not used yet</div>
+              <div style={{ ...heading, fontSize: 24, color: THEME.terra }}>{rows.filter((r) => r.status === 'active').length}</div></div>
+          </div>
+          <NewGiftCardForm onCreated={load} />
+          <label style={{ fontSize: 13, color: THEME.textMid, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+            <input type="checkbox" checked={showUnpaid} onChange={(e) => setShowUnpaid(e.target.checked)} />
+            Show unpaid attempts (someone opened the payment QR but didn't pay)
+          </label>
+          <div style={{ ...card, padding: 0, overflow: 'auto' }}>
+            <table width="100%" style={{ borderCollapse: 'collapse' }}>
+              <thead><tr style={{ background: THEME.cream2 }}>
+                <th style={thStyle}>Code</th><th style={thStyle}>Package</th><th style={thStyle}>From → To</th>
+                <th style={thStyle}>Buyer</th><th style={thStyle}>Paid</th><th style={thStyle}>Status</th><th style={thStyle}></th>
+              </tr></thead>
+              <tbody>
+                {visible.map((r) => (
+                  <tr key={r.id} style={{ borderTop: `1px solid ${THEME.border}` }}>
+                    <td style={{ ...tdStyle, fontWeight: 700, fontFamily: 'monospace', fontSize: 13 }}>
+                      {r.code || '—'}
+                      <div style={{ fontFamily: "'Nunito', sans-serif", fontWeight: 400, color: THEME.textSoft, fontSize: 12 }}>{fmtDate(r.activated_at || r.created_at)}</div>
+                    </td>
+                    <td style={tdStyle}>{TIER_SHORT[r.tier] || r.tier}</td>
+                    <td style={tdStyle}>{r.from_name} → {r.to_name}</td>
+                    <td style={{ ...tdStyle, color: THEME.textMid }}>
+                      {r.buyer_phone || ''}{r.buyer_email ? <div style={{ fontSize: 12 }}>{r.buyer_email}</div> : null}
+                      {!r.buyer_phone && !r.buyer_email && <span style={{ color: THEME.textSoft }}>{r.note || '—'}</span>}
+                    </td>
+                    <td style={tdStyle}>{fmtMnt(r.price_paid)}</td>
+                    <td style={tdStyle}>
+                      <CodeStatusPill status={r.status} />
+                      {r.used_order_number && <div style={{ fontSize: 12, color: THEME.textSoft, marginTop: 4 }}>on {r.used_order_number}</div>}
+                    </td>
+                    <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+                      {r.code && (
+                        <Button variant="ghost" onClick={() => copyLink(r.code)}>{copied === r.code ? '✓ Copied' : 'Copy link'}</Button>
+                      )}
+                      {r.status === 'active' && <Button variant="danger" onClick={() => setStatus(r, 'disabled')}>Turn off</Button>}
+                      {r.status === 'disabled' && <Button variant="secondary" onClick={() => setStatus(r, 'active')}>Turn on</Button>}
+                    </td>
+                  </tr>
+                ))}
+                {!visible.length && <tr><td colSpan={7} style={{ ...tdStyle, color: THEME.textSoft, textAlign: 'center', padding: 24 }}>No gift cards yet</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [showNewOrder, setShowNewOrder] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [page, setPage] = useState('orders');
   const animalNames = useAnimalNames();
 
   useEffect(() => {
@@ -1118,15 +1478,25 @@ export default function App() {
   return (
     <div style={pageWrap}>
       <div style={{ maxWidth: 960, margin: '0 auto' }}>
-        <h1 style={{ ...heading, fontSize: 30, marginBottom: 28 }}>Amiya Publishing — Orders</h1>
-        {showNewOrder ? (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 28 }}>
+          <h1 style={{ ...heading, fontSize: 30 }}>Amiya Publishing — {page === 'codes' ? 'Codes & gift cards' : 'Orders'}</h1>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <Button variant={page === 'orders' ? 'primary' : 'ghost'} onClick={() => { setPage('orders'); setSelectedOrder(null); setShowNewOrder(false); }}>Orders</Button>
+            <Button variant={page === 'codes' ? 'primary' : 'ghost'} onClick={() => setPage('codes')}>Codes & gift cards</Button>
+          </div>
+        </div>
+        {page === 'codes' ? (
+          <CodesPage />
+        ) : showNewOrder ? (
           <NewOrderForm
             onCreated={() => { setShowNewOrder(false); setRefreshKey((k) => k + 1); }}
             onCancel={() => setShowNewOrder(false)}
           />
         ) : selectedOrder ? (
           <OrderDetail
+            key={`${selectedOrder.id}-${selectedOrder.child_name}`}
             order={selectedOrder}
+            onChanged={(patch) => setSelectedOrder((o) => ({ ...o, ...patch }))}
             onBack={() => { setSelectedOrder(null); setRefreshKey((k) => k + 1); }}
             onUpdated={() => { setRefreshKey((k) => k + 1); setSelectedOrder(null); }}
             animalNames={animalNames}
