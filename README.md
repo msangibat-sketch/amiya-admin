@@ -261,5 +261,5 @@ no storage upload, no Heyzine book, and its working folder is deleted.
 - Names with letters that have no art (e.g. Ю, К, П, Ф, Щ, or Latin) get
   `422 unsupported_letters`.
 - Safeguards so it never slows real orders: `PREVIEW_LIMIT_PER_HOUR`
-  (default 12 per visitor) and `PREVIEW_CONCURRENCY` (default 2 at once).
+  (default 3 per visitor per hour) and `PREVIEW_CONCURRENCY` (default 2 at once).
 - Switch off without a code change: set `PREVIEW_ENABLED=0` on Render.

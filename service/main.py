@@ -476,7 +476,7 @@ from fastapi.responses import JSONResponse
 
 PREVIEW_ENABLED = os.environ.get("PREVIEW_ENABLED", "1") != "0"
 PREVIEW_CONCURRENCY = int(os.environ.get("PREVIEW_CONCURRENCY", "2"))
-PREVIEW_LIMIT = int(os.environ.get("PREVIEW_LIMIT_PER_HOUR", "12"))
+PREVIEW_LIMIT = int(os.environ.get("PREVIEW_LIMIT_PER_HOUR", "3"))
 _preview_slots = threading.BoundedSemaphore(PREVIEW_CONCURRENCY)
 _preview_hits = {}
 _preview_hits_lock = threading.Lock()
