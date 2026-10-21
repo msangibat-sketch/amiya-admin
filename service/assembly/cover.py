@@ -23,6 +23,7 @@ spine width.
 """
 import os
 import fitz
+import uuid
 from PIL import Image, ImageDraw, ImageFont
 
 MM_TO_PT = 72 / 25.4
@@ -167,7 +168,27 @@ def build_resized_cover_background(blank_cover_path, spine_width_mm, out_path):
     return canvas.size
 
 
-def build_digital_cover_page(child_name, gender, asset_root, target_w_mm, target_h_mm, out_path, dpi=150):
+_template_cache = {}
+
+
+def _cover_template_image(path, source_dpi):
+    """The blank cover rendered to an image. Low-resolution renders (the
+    website preview) are kept in memory, since they don't depend on the
+    name; the 300 dpi render for real books is not cached (too large)."""
+    key = (path, source_dpi)
+    if key in _template_cache:
+        return _template_cache[key].copy()
+    src_doc = fitz.open(path)
+    pix = src_doc[0].get_pixmap(matrix=fitz.Matrix(source_dpi / 72, source_dpi / 72))
+    img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    src_doc.close()
+    if source_dpi < DPI:
+        _template_cache[key] = img.copy()
+    return img
+
+
+def build_digital_cover_page(child_name, gender, asset_root, target_w_mm, target_h_mm, out_path, dpi=150,
+                             source_dpi=DPI):
     """
     Builds a single flat cover page for the DIGITAL reader (Heyzine) --
     just the front panel of the print cover, with no spine/back
@@ -183,17 +204,15 @@ def build_digital_cover_page(child_name, gender, asset_root, target_w_mm, target
     logo_path = os.path.join(asset_root, "covers", "logo.png")
 
     # crop just the front panel from the source template, at native size
-    src_doc = fitz.open(blank_cover_path)
-    src_page = src_doc[0]
-    pix = src_page.get_pixmap(matrix=fitz.Matrix(DPI / 72, DPI / 72))
-    img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-    src_doc.close()
+    # source_dpi: the website preview passes a low value for speed; the
+    # real book keeps the full 300.
+    img = _cover_template_image(blank_cover_path, source_dpi)
 
-    mm_to_px = DPI / 25.4
+    mm_to_px = source_dpi / 25.4
     spine_x1_px = round(SOURCE_SPINE_END_MM * mm_to_px)
     panel_w_px = round(PANEL_W_MM * mm_to_px)
     front_panel = img.crop((spine_x1_px, 0, img.width, img.height)).resize((panel_w_px, img.height), Image.LANCZOS)
-    front_panel_png = "/tmp/_digital_cover_panel.png"
+    front_panel_png = f"/tmp/_digital_cover_panel_{uuid.uuid4().hex}.png"   # unique: covers can build at the same time
     front_panel.save(front_panel_png)
 
     # build at native panel size (240x258mm) with vector title + logo --
@@ -204,6 +223,7 @@ def build_digital_cover_page(child_name, gender, asset_root, target_w_mm, target
     native_doc = fitz.open()
     native_page = native_doc.new_page(width=PANEL_W_MM * MM_TO_PT, height=TOTAL_H_MM * MM_TO_PT)
     native_page.insert_image(native_page.rect, filename=front_panel_png)
+    os.remove(front_panel_png)
     draw_title(native_page, "МИНИЙ НЭР", child_name.upper(), gender, font_path,
                cx_mm=front_safe_cx_mm, top_mm=TITLE_TOP_MM)
     lx0_mm = front_safe_cx_mm - LOGO_W_MM / 2
@@ -261,7 +281,7 @@ def build_cover(child_name, gender, asset_root, out_path):
     font_path = os.path.join(asset_root, "fonts", "Lazydog-Regular.ttf")
     logo_path = os.path.join(asset_root, "covers", "logo.png")
 
-    resized_bg_png = "/tmp/_cover_bg_resized.png"
+    resized_bg_png = f"/tmp/_cover_bg_resized_{uuid.uuid4().hex}.png"   # unique: covers can build at the same time
     total_w_px, total_h_px = build_resized_cover_background(blank_cover_path, spine_width_mm, resized_bg_png)
     total_w_mm = total_w_px / DPI * 25.4
     total_h_mm = total_h_px / DPI * 25.4
@@ -273,6 +293,7 @@ def build_cover(child_name, gender, asset_root, out_path):
     doc = fitz.open()
     page = doc.new_page(width=total_w_mm * MM_TO_PT, height=total_h_mm * MM_TO_PT)
     page.insert_image(page.rect, filename=resized_bg_png)
+    os.remove(resized_bg_png)
 
     draw_title(page, "МИНИЙ НЭР", child_name.upper(), gender, font_path,
                cx_mm=front_safe_cx_mm, top_mm=TITLE_TOP_MM)

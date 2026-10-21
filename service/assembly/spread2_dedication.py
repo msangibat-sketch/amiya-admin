@@ -23,21 +23,29 @@ RIGHT_MARGIN_Y0 = BLEED_MM + MARGIN_MM
 RIGHT_MARGIN_Y1 = BLEED_MM + PAGE_TRIM_MM - MARGIN_MM
 
 
+
+def _png_bytes(img):
+    import io
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", compress_level=1)   # fast; PyMuPDF re-compresses it anyway
+    return buf.getvalue()
+
 def build_spread2(spread_path, photo_path, dedication_text, out_path):
     doc = fitz.open(spread_path)
     page = doc[0]
 
     # photo, contain-fit + feathered, centered in left page margin box
     canvas = contain_fit_with_feather(photo_path, PHOTO_BOX_W_MM, PHOTO_BOX_H_MM, FEATHER_MM)
-    tmp_path = "/tmp/_spread2_photo.png"
-    canvas.save(tmp_path)
+    # Kept in memory, never a shared temp file: two books building at the
+    # same time (an order and a preview) must never swap photos.
+    photo_png = _png_bytes(canvas)
     avail_w = LEFT_MARGIN_X1 - LEFT_MARGIN_X0
     avail_h = LEFT_MARGIN_Y1 - LEFT_MARGIN_Y0
     box_x0 = LEFT_MARGIN_X0 + (avail_w - PHOTO_BOX_W_MM) / 2
     box_y0 = LEFT_MARGIN_Y0 + (avail_h - PHOTO_BOX_H_MM) / 2
     rect = fitz.Rect(box_x0 * MM_TO_PT, box_y0 * MM_TO_PT,
                       (box_x0 + PHOTO_BOX_W_MM) * MM_TO_PT, (box_y0 + PHOTO_BOX_H_MM) * MM_TO_PT)
-    page.insert_image(rect, filename=tmp_path)
+    page.insert_image(rect, stream=photo_png)
 
     # dedication text: measure actual used height first (dry run on a scratch
     # page), then center that block both horizontally and vertically within

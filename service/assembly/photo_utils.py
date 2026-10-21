@@ -70,8 +70,9 @@ def build_dedication_photo_test(spread_path, photo_path, out_path):
     page = doc[0]
 
     canvas = contain_fit_with_feather(photo_path, PHOTO_BOX_W_MM, PHOTO_BOX_H_MM, FEATHER_MM)
-    tmp_path = "/tmp/_dedication_photo.png"
-    canvas.save(tmp_path)
+    import io
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
 
     # center the box within the left page's margin area
     avail_w = LEFT_PAGE_MARGIN_X1 - LEFT_PAGE_MARGIN_X0
@@ -81,7 +82,7 @@ def build_dedication_photo_test(spread_path, photo_path, out_path):
 
     rect = fitz.Rect(box_x0 * MM_TO_PT, box_y0 * MM_TO_PT,
                       (box_x0 + PHOTO_BOX_W_MM) * MM_TO_PT, (box_y0 + PHOTO_BOX_H_MM) * MM_TO_PT)
-    page.insert_image(rect, filename=tmp_path)
+    page.insert_image(rect, stream=buf.getvalue())
     doc.save(out_path)
     print(f"Saved {out_path}")
 

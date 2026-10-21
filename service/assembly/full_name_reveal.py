@@ -183,9 +183,10 @@ def build_full_name_reveal(spread_path, name_sequence, out_path, night_letters_d
             bottom_y_mm = baseline_y_mm
         rect = fitz.Rect(x_cursor * MM_TO_PT, top_y_mm * MM_TO_PT,
                           (x_cursor + w_mm) * MM_TO_PT, bottom_y_mm * MM_TO_PT)
-        tmp_path = f"/tmp/_reveal_{key}_{case}_{kind}.png"
-        cropped.save(tmp_path)
-        page.insert_image(rect, filename=tmp_path)
+        import io
+        buf = io.BytesIO()
+        cropped.save(buf, format="PNG")
+        page.insert_image(rect, stream=buf.getvalue())
         x_cursor += w_mm + gap_mm
 
     doc.save(out_path)

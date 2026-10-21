@@ -227,9 +227,10 @@ def draw_accumulation(page, given_items, full_layout, reference_H, actual_letter
         rect = fitz.Rect(x0_mm * MM_TO_PT, top_y_mm * MM_TO_PT,
                           (x0_mm + w_mm) * MM_TO_PT, bottom_y_mm * MM_TO_PT)
 
-        tmp_path = f"/tmp/_final_{key}_{case}_{variant}_{kind}_{'night' if is_night else 'day'}.png"
-        use_cropped.save(tmp_path)
-        page.insert_image(rect, filename=tmp_path)
+        import io
+        buf = io.BytesIO()
+        use_cropped.save(buf, format="PNG")
+        page.insert_image(rect, stream=buf.getvalue())
 
 
 def insert_caption(page, text, side, color=TEXT_COLOR_DAY):
@@ -304,7 +305,7 @@ def resolve_spread_path(spreads_dir, key, case, variant, kind, gender):
     )
 
 
-def build_letter_sequence(asset_root, letter_variants, gender, out_dir, caption_xlsx_path=None):
+def build_letter_sequence(asset_root, letter_variants, gender, out_dir, caption_xlsx_path=None, max_letters=None):
     """
     letter_variants: list of dicts [{"key":"a","case":"u","variant":"1"}, ...]
     representing the child's name in order. A dash is represented as
@@ -314,6 +315,10 @@ def build_letter_sequence(asset_root, letter_variants, gender, out_dir, caption_
     pairs, in order) ready to be stitched into the full book by stitch.py.
     Dash entries contribute no page of their own -- they just become part
     of the accumulation garland from that point onward.
+
+    max_letters: stop after this many letters (the website preview builds
+    only the first two). The pages it does build are identical to the full
+    book's, since each give spread's garland only uses letters given so far.
     """
     import os
     spreads_dir = os.path.join(asset_root, "spreads")
@@ -344,6 +349,8 @@ def build_letter_sequence(asset_root, letter_variants, gender, out_dir, caption_
     page_idx = 0
 
     for key, case, variant, _, kind in name_sequence:
+        if max_letters is not None and page_idx >= max_letters:
+            break
         if kind == "dash":
             # no page of its own -- just becomes part of the accumulation
             # for whatever letter comes next
