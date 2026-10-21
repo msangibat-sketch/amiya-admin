@@ -241,6 +241,9 @@ def upload_to_heyzine(pdf_public_url: str) -> str | None:
 @app.on_event("startup")
 def startup():
     os.makedirs(OUTPUT_ROOT, exist_ok=True)
+    if os.environ.get("PREVIEW_ENABLED", "1") != "0":
+        import threading as _t
+        _t.Thread(target=_warm_preview, daemon=True).start()
 
     print("=" * 50)
     print("ASSET VERIFICATION AT STARTUP")
@@ -454,6 +457,127 @@ def generate_cover(req: GenerateCoverRequest):
         total_pages=total_pages,
         spine_width_mm=spine_width_mm,
     )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Website preview (amiyapublishing.com, before ordering)
+#
+# Builds only the pages a parent sees -- see assembly/preview.py. Nothing
+# is saved, uploaded or sent to Heyzine. Two safeguards keep it from
+# slowing down real orders: a per-visitor limit, and at most
+# PREVIEW_CONCURRENCY previews building at once (others get "busy").
+# Set PREVIEW_ENABLED=0 on Render to switch it off without a code change.
+# ─────────────────────────────────────────────────────────────────
+import threading
+import time
+import shutil
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+PREVIEW_ENABLED = os.environ.get("PREVIEW_ENABLED", "1") != "0"
+PREVIEW_CONCURRENCY = int(os.environ.get("PREVIEW_CONCURRENCY", "2"))
+PREVIEW_LIMIT = int(os.environ.get("PREVIEW_LIMIT_PER_HOUR", "3"))
+_preview_slots = threading.BoundedSemaphore(PREVIEW_CONCURRENCY)
+_preview_hits = {}
+_preview_hits_lock = threading.Lock()
+
+
+class PreviewRequest(BaseModel):
+    child_name: str
+    gender: str
+    dedication_text: str = ""
+    photo_base64: str
+
+
+class AutopickRequest(BaseModel):
+    child_name: str
+    gender: str
+
+
+def _visitor_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    return fwd.split(",")[0].strip() or (request.client.host if request.client else "?")
+
+
+def _over_limit(ip: str) -> bool:
+    now = time.time()
+    with _preview_hits_lock:
+        hits = [t for t in _preview_hits.get(ip, []) if now - t < 3600]
+        if len(hits) >= PREVIEW_LIMIT:
+            _preview_hits[ip] = hits
+            return True
+        hits.append(now)
+        _preview_hits[ip] = hits
+        if len(_preview_hits) > 5000:          # forget old visitors
+            for k in [k for k, v in _preview_hits.items() if not v or now - v[-1] > 3600]:
+                _preview_hits.pop(k, None)
+        return False
+
+
+def _preview_error(status, code, **extra):
+    return JSONResponse(status_code=status, content={"error": code, **extra})
+
+
+@app.post("/preview")
+def preview(req: PreviewRequest, request: Request):
+    import base64
+    from assembly.preview import build_preview, UnsupportedLetters
+
+    if not PREVIEW_ENABLED:
+        return _preview_error(503, "disabled")
+    if req.gender not in ("boy", "girl"):
+        return _preview_error(400, "bad_gender")
+    name = req.child_name.strip()
+    if not name or len(name) > 25:
+        return _preview_error(400, "bad_name")
+    if len(req.dedication_text) > 1000:
+        return _preview_error(400, "dedication_too_long")
+    try:
+        photo_bytes = base64.b64decode(req.photo_base64.split(",")[-1])
+    except Exception:
+        return _preview_error(400, "bad_photo")
+    if not photo_bytes or len(photo_bytes) > 8 * 1024 * 1024:
+        return _preview_error(400, "bad_photo")
+    if _over_limit(_visitor_ip(request)):
+        return _preview_error(429, "rate_limited")
+    if not _preview_slots.acquire(timeout=20):
+        return _preview_error(503, "busy")
+
+    work_dir = os.path.join(OUTPUT_ROOT, f"preview_{uuid.uuid4().hex[:12]}")
+    try:
+        result = build_preview(ASSET_ROOT, name, req.gender, req.dedication_text, photo_bytes, work_dir)
+        return result
+    except UnsupportedLetters as e:
+        return _preview_error(422, "unsupported_letters", letters=e.letters)
+    except Exception as e:
+        print(f"[preview] failed for {name!r}: {e!r}")
+        return _preview_error(500, "failed")
+    finally:
+        _preview_slots.release()
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+@app.post("/autopick")
+def autopick(req: AutopickRequest):
+    """The automatic animal picks for a name (same rule as the preview), so
+    the dashboard and order site can save them with the order."""
+    from assembly.autopick import pick_variants
+    from assembly.preview import _caption_keys
+    if req.gender not in ("boy", "girl"):
+        raise HTTPException(400, "gender must be 'boy' or 'girl'")
+    variants, unsupported = pick_variants(req.child_name, req.gender, ASSET_ROOT, _caption_keys(ASSET_ROOT))
+    return {"letter_variants": variants, "unsupported": unsupported}
+
+
+def _warm_preview():
+    """Loads the preview's caches in the background so the first visitor
+    doesn't wait for them."""
+    try:
+        from assembly.preview import warm_up
+        warm_up(ASSET_ROOT)
+        print("[preview] caches warm")
+    except Exception as e:
+        print(f"[preview] warm-up skipped: {e!r}")
 
 
 @app.post("/upload-photo", response_model=UploadPhotoResponse)

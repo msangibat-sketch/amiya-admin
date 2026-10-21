@@ -245,3 +245,21 @@ dashboard field or a status value) obviously does.
 - **Asset filenames need to be exact**: no `_asset` suffixes, no case
   differences, no stray spaces — the code does exact-match path lookups,
   not fuzzy search.
+
+## Website preview (`POST /preview`)
+
+The order site shows parents a preview of their own book before they pay.
+The service builds only the visible pages (cover, hello, dedication, the two
+story spreads, the first two letters, farewell) at screen quality with a
+"Миний нэр · preview" watermark, returns them as images, and saves nothing:
+no storage upload, no Heyzine book, and its working folder is deleted.
+
+- Animals are picked automatically (`assembly/autopick.py`): 1st time a
+  letter appears → variant 1, 2nd time → variant 2, falling back to the
+  highest complete variant below. `POST /autopick` returns the same picks so
+  they can be saved with the order.
+- Names with letters that have no art (e.g. Ю, К, П, Ф, Щ, or Latin) get
+  `422 unsupported_letters`.
+- Safeguards so it never slows real orders: `PREVIEW_LIMIT_PER_HOUR`
+  (default 3 per visitor per hour) and `PREVIEW_CONCURRENCY` (default 2 at once).
+- Switch off without a code change: set `PREVIEW_ENABLED=0` on Render.
