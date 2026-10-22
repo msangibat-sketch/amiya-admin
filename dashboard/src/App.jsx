@@ -1457,6 +1457,136 @@ function CodesPage() {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Weekly numbers: how far visitors get on the website, week by week.
+// Website steps come from funnel_events (schema/migration_funnel_events.sql);
+// orders started / paid and the Premium share come from orders.
+// ─────────────────────────────────────────────────────────────────
+const STATS_WEEKS = 8;
+
+function weekStart(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));   // back to Monday
+  return x;
+}
+function fmtWeek(d) {
+  const end = new Date(d); end.setDate(end.getDate() + 6);
+  const f = (x) => `${x.getMonth() + 1}/${x.getDate()}`;
+  return `${f(d)} – ${f(end)}`;
+}
+function pct(a, b) {
+  return b ? `${Math.round((a / b) * 100)}%` : '—';
+}
+
+function StatsPage() {
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => { load(); }, []);
+
+  async function load() {
+    const since = weekStart(new Date());
+    since.setDate(since.getDate() - 7 * (STATS_WEEKS - 1));
+    const [ev, ord] = await Promise.all([
+      supabase.from('funnel_events').select('event, created_at').gte('created_at', since.toISOString()).limit(20000),
+      supabase.from('orders').select('created_at, status, tier').gte('created_at', since.toISOString()).limit(5000),
+    ]);
+    if (ev.error || ord.error) {
+      setError((ev.error || ord.error).message);
+      return;
+    }
+    const weeks = [];
+    for (let i = 0; i < STATS_WEEKS; i++) {
+      const w = new Date(since); w.setDate(w.getDate() + 7 * i);
+      weeks.push({ start: w, form: 0, built: 0, unsupported: 0, failed: 0, pkg: 0, started: 0, paid: 0, premium: 0 });
+    }
+    const find = (t) => {
+      const ws = weekStart(t).getTime();
+      return weeks.find((w) => w.start.getTime() === ws);
+    };
+    for (const e of ev.data) {
+      const w = find(e.created_at); if (!w) continue;
+      if (e.event === 'form_started') w.form++;
+      else if (e.event === 'preview_built') w.built++;
+      else if (e.event === 'preview_unsupported') w.unsupported++;
+      else if (e.event === 'preview_failed' || e.event === 'preview_limited') w.failed++;
+      else if (e.event === 'package_reached') w.pkg++;
+    }
+    for (const o of ord.data) {
+      const w = find(o.created_at); if (!w) continue;
+      w.started++;
+      if (o.status !== 'pending_payment') {
+        w.paid++;
+        if (o.tier === 'premium') w.premium++;
+      }
+    }
+    setError(null);
+    setRows(weeks.reverse());
+  }
+
+  const th = { padding: '8px 10px', color: THEME.textMid, fontWeight: 700, textAlign: 'right', whiteSpace: 'nowrap' };
+  const td = { padding: '8px 10px', textAlign: 'right', borderTop: `1px solid ${THEME.border}` };
+
+  if (error) {
+    return (
+      <div style={card}>
+        <p style={{ color: THEME.danger, marginBottom: 8 }}>Couldn't load the numbers: {error}</p>
+        <p style={{ fontSize: 13, color: THEME.textSoft }}>
+          If it says funnel_events doesn't exist, run schema/migration_funnel_events.sql in Supabase → SQL Editor once.
+        </p>
+      </div>
+    );
+  }
+  if (!rows) return <p style={{ color: THEME.textSoft }}>Loading…</p>;
+
+  return (
+    <div style={card}>
+      <p style={{ fontSize: 13, color: THEME.textSoft, marginBottom: 14, lineHeight: 1.6 }}>
+        Newest week first, Monday to Sunday. Website steps are counted from Oct 22, 2026, when tracking started.
+        "Orders started" includes unpaid checkouts; "Paid" is every other order, including ones added here by hand.
+      </p>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse', background: '#fff' }}>
+          <thead>
+            <tr style={{ background: THEME.cream2 }}>
+              <th style={{ ...th, textAlign: 'left' }}>Week</th>
+              <th style={th}>Started form</th>
+              <th style={th}>Previews</th>
+              <th style={th} title="Name had a letter with no art yet">No art</th>
+              <th style={th} title="Failed, service busy, or hourly limit reached">Preview failed</th>
+              <th style={th}>Package step</th>
+              <th style={th}>Orders started</th>
+              <th style={th}>Paid</th>
+              <th style={th}>Premium share</th>
+              <th style={th} title="Paid orders ÷ visitors who started the form">Started → paid</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((w) => (
+              <tr key={w.start.toISOString()}>
+                <td style={{ ...td, textAlign: 'left', whiteSpace: 'nowrap' }}>{fmtWeek(w.start)}</td>
+                <td style={td}>{w.form}</td>
+                <td style={td}>{w.built}</td>
+                <td style={td}>{w.unsupported}</td>
+                <td style={td}>{w.failed}</td>
+                <td style={td}>{w.pkg}</td>
+                <td style={td}>{w.started}</td>
+                <td style={{ ...td, fontWeight: 700 }}>{w.paid}</td>
+                <td style={td}>{pct(w.premium, w.paid)}</td>
+                <td style={td}>{pct(w.paid, w.form)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop: 14 }}>
+        <Button variant="secondary" onClick={load}>Refresh</Button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [selectedOrder, setSelectedOrder] = useState(null);
@@ -1479,14 +1609,17 @@ export default function App() {
     <div style={pageWrap}>
       <div style={{ maxWidth: 960, margin: '0 auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 28 }}>
-          <h1 style={{ ...heading, fontSize: 30 }}>Amiya Publishing — {page === 'codes' ? 'Codes & gift cards' : 'Orders'}</h1>
+          <h1 style={{ ...heading, fontSize: 30 }}>Amiya Publishing — {page === 'codes' ? 'Codes & gift cards' : page === 'stats' ? 'Weekly numbers' : 'Orders'}</h1>
           <div style={{ display: 'flex', gap: 6 }}>
             <Button variant={page === 'orders' ? 'primary' : 'ghost'} onClick={() => { setPage('orders'); setSelectedOrder(null); setShowNewOrder(false); }}>Orders</Button>
             <Button variant={page === 'codes' ? 'primary' : 'ghost'} onClick={() => setPage('codes')}>Codes & gift cards</Button>
+            <Button variant={page === 'stats' ? 'primary' : 'ghost'} onClick={() => setPage('stats')}>Numbers</Button>
           </div>
         </div>
         {page === 'codes' ? (
           <CodesPage />
+        ) : page === 'stats' ? (
+          <StatsPage />
         ) : showNewOrder ? (
           <NewOrderForm
             onCreated={() => { setShowNewOrder(false); setRefreshKey((k) => k + 1); }}
