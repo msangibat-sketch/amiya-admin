@@ -518,6 +518,28 @@ def _preview_error(status, code, **extra):
     return JSONResponse(status_code=status, content={"error": code, **extra})
 
 
+def _log_event(event, detail=None):
+    """Adds a row to funnel_events (weekly numbers in the dashboard) in the
+    background. Never slows down or breaks a preview if Supabase is
+    unreachable or the table doesn't exist yet."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return
+
+    def send():
+        try:
+            import requests
+            requests.post(
+                f"{SUPABASE_URL}/rest/v1/funnel_events",
+                headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                         "Content-Type": "application/json", "Prefer": "return=minimal"},
+                json={"event": event, "detail": detail}, timeout=10,
+            )
+        except Exception as e:
+            print(f"[funnel] could not log {event}: {e!r}")
+
+    threading.Thread(target=send, daemon=True).start()
+
+
 @app.post("/preview")
 def preview(req: PreviewRequest, request: Request):
     import base64
@@ -539,18 +561,23 @@ def preview(req: PreviewRequest, request: Request):
     if not photo_bytes or len(photo_bytes) > 8 * 1024 * 1024:
         return _preview_error(400, "bad_photo")
     if _over_limit(_visitor_ip(request)):
+        _log_event("preview_limited")
         return _preview_error(429, "rate_limited")
     if not _preview_slots.acquire(timeout=20):
+        _log_event("preview_failed", "busy")
         return _preview_error(503, "busy")
 
     work_dir = os.path.join(OUTPUT_ROOT, f"preview_{uuid.uuid4().hex[:12]}")
     try:
         result = build_preview(ASSET_ROOT, name, req.gender, req.dedication_text, photo_bytes, work_dir)
+        _log_event("preview_built", req.gender)
         return result
     except UnsupportedLetters as e:
+        _log_event("preview_unsupported", "".join(e.letters))
         return _preview_error(422, "unsupported_letters", letters=e.letters)
     except Exception as e:
         print(f"[preview] failed for {name!r}: {e!r}")
+        _log_event("preview_failed", type(e).__name__)
         return _preview_error(500, "failed")
     finally:
         _preview_slots.release()
