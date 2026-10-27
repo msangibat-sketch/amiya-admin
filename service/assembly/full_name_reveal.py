@@ -1,7 +1,6 @@
+import os
 import fitz
-from PIL import Image
-import numpy as np
-from .letters import measure_letter_only_ratio
+from .letter_art import load_letter_art, draw_hanging_letter, draw_centered_piece
 
 MM_TO_PT = 72 / 25.4
 BLEED_MM = 3.0
@@ -16,13 +15,16 @@ ZONE_Y1_MM = BLEED_MM + (SPREAD_H_MM - 2 * BLEED_MM) - MARGIN_MM
 ZONE_W_MM = ZONE_X1_MM - ZONE_X0_MM
 ZONE_H_MM = ZONE_Y1_MM - ZONE_Y0_MM
 
-REFERENCE_SLOTS = 10
-UPSIZE_MULT = 1.8
 BASELINE_FRACTION = 0.45  # "a bit above half" the zone height (was 0.4 on the per-letter pages)
+THREAD_TOP_Y_MM = -1.0    # threads are drawn up to here: just past the top (bleed) edge
 
-MAX_TOTAL_H_MM = 400.0
-MIN_TOTAL_H_MM = 40.0
-BASE_GAP_MM = 6.0
+# All sizes below are relative to the LOWERCASE GLYPH height (the illustrated
+# letter only, thread excluded) -- see letter_art.py for why.
+UPSIZE_MULT = 1.8     # first letter / letter after a dash: glyph height = this x lowercase
+GAP_MULT = 0.085      # space between letters = this x lowercase glyph height
+DASH_SIZE_MULT = 0.6
+DASH_MAX_WIDTH_MULT = 0.8
+DASH_FILENAME = "hyphen-1-u.png"
 
 # The order-form automation supports names of 5-10 letters (shorter/longer
 # names are handled manually). Rather than a single fixed width target for
@@ -44,23 +46,6 @@ def target_width_fraction(n_letters):
     t = (n_letters - MIN_AUTOMATED_LETTERS) / (MAX_AUTOMATED_LETTERS - MIN_AUTOMATED_LETTERS)
     return WIDTH_FRACTION_AT_MIN_LETTERS + t * (WIDTH_FRACTION_AT_MAX_LETTERS - WIDTH_FRACTION_AT_MIN_LETTERS)
 
-DASH_SIZE_MULT = 0.6
-DASH_MAX_WIDTH_MULT = 0.8
-TYPICAL_LETTER_VISUAL_RATIO = 0.17
-DASH_FILENAME = "hyphen-1-u.png"
-
-
-def analyze_letter(path):
-    im = Image.open(path).convert('RGBA')
-    arr = np.array(im)
-    alpha = arr[:, :, 3]
-    rows_nz = np.where(alpha.max(axis=1) > 10)[0]
-    top_row, bottom_row = int(rows_nz.min()), int(rows_nz.max())
-    cols_nz = np.where(alpha.max(axis=0) > 10)[0]
-    left_col, right_col = int(cols_nz.min()), int(cols_nz.max())
-    cropped = im.crop((left_col, top_row, right_col + 1, bottom_row + 1))
-    return cropped, cropped.width / cropped.height
-
 
 def mark_upsize_flags(name_sequence):
     """First letter, and any letter immediately following a literal '-' entry
@@ -80,14 +65,15 @@ def mark_upsize_flags(name_sequence):
     return flags
 
 
-def solve_height(letters_aspect_upsize, count_for_sizing, max_name_w_mm):
-    for candidate in [x / 10 for x in range(int(MAX_TOTAL_H_MM * 10), int(MIN_TOTAL_H_MM * 10) - 1, -1)]:
-        gap = BASE_GAP_MM * (candidate / MAX_TOTAL_H_MM)
-        total_w = sum((candidate * UPSIZE_MULT if up else candidate) * aspect
-                      for aspect, up in letters_aspect_upsize) + (count_for_sizing - 1) * gap
-        if total_w <= max_name_w_mm:
-            return candidate, gap
-    return MIN_TOTAL_H_MM, BASE_GAP_MM * (MIN_TOTAL_H_MM / MAX_TOTAL_H_MM)
+def _dash_path(night_letters_dir):
+    """Night dash if there is one, else the day dash (it has no string anyway)."""
+    if not night_letters_dir:
+        return None
+    for d in (night_letters_dir, os.path.join(os.path.dirname(night_letters_dir), "letters")):
+        p = os.path.join(d, DASH_FILENAME)
+        if os.path.exists(p):
+            return p
+    return None
 
 
 def build_full_name_reveal(spread_path, name_sequence, out_path, night_letters_dir=None):
@@ -95,103 +81,87 @@ def build_full_name_reveal(spread_path, name_sequence, out_path, night_letters_d
     name_sequence items are (key, case, variant, path) for real letters, or
     the literal string "-" for a dash. night_letters_dir, if given, is used
     to find the dash asset (this page is always a night scene).
-    """
-    upsize_flags_full = mark_upsize_flags(name_sequence)
 
-    # build a unified list preserving order, tagging kind
-    items = []
-    for entry, up in zip(name_sequence, upsize_flags_full):
+    Sizing: the name's total width is set to target_width_fraction() of the
+    zone, solved directly from each letter's GLYPH width -- so every lowercase
+    glyph ends up the same height and every capital glyph the same (larger)
+    height, whatever thread length or canvas the PNG was exported with. If
+    that would push the capitals above the top of the zone, everything is
+    scaled down together instead.
+    """
+    upsize_flags = mark_upsize_flags(name_sequence)
+
+    items = []  # (kind, art, upsize)
+    dash_art = None
+    for entry, up in zip(name_sequence, upsize_flags):
         if entry == "-":
-            dash_path = None
-            if night_letters_dir:
-                candidate = f"{night_letters_dir}/{DASH_FILENAME}"
-                import os
-                if os.path.exists(candidate):
-                    dash_path = candidate
-            items.append(("-", None, None, dash_path, "dash", False))
+            if dash_art is None:
+                p = _dash_path(night_letters_dir)
+                dash_art = load_letter_art(p) if p else False
+            if dash_art:
+                items.append(("dash", dash_art, False))
+            else:
+                print("[warning] no dash asset found -- leaving a gap in the name reveal")
+                items.append(("gap", None, False))
         else:
             key, case, variant, path = entry
-            items.append((key, case, variant, path, "letter", up))
+            items.append(("letter", load_letter_art(path), bool(up)))
 
-    analyzed = []
-    for key, case, variant, path, kind, up in items:
-        cropped, aspect = analyze_letter(path)
-        analyzed.append((key, case, cropped, aspect, up, kind))
+    letters = [(art, up) for (kind, art, up) in items if kind == "letter"]
+    n_real_letters = len(letters)
+    target_w_mm = ZONE_W_MM * target_width_fraction(n_real_letters)
 
-    n = len(analyzed)
-    sizing_n = max(n, REFERENCE_SLOTS)
-    non_dash = [(a, up) for (_, _, _, a, up, kind) in analyzed if kind != "dash"]
-    letters_for_sizing = list(non_dash)
-    if len(letters_for_sizing) < REFERENCE_SLOTS:
-        avg_aspect = sum(a for (a, up) in non_dash) / len(non_dash)
-        letters_for_sizing += [(avg_aspect, False)] * (REFERENCE_SLOTS - len(letters_for_sizing))
-
-    letter_ratios = [measure_letter_only_ratio(cropped) for (_, _, cropped, _, _, kind) in analyzed if kind != "dash"]
-    actual_letter_ratio = sum(letter_ratios) / len(letter_ratios) if letter_ratios else TYPICAL_LETTER_VISUAL_RATIO
-
-    n_real_letters = len(non_dash)
-    target_frac = target_width_fraction(n_real_letters)
-    target_w_mm = ZONE_W_MM * target_frac
-
-    H, gap_mm = solve_height(letters_for_sizing, sizing_n, target_w_mm)
-    letter_visual_h_mm = H * actual_letter_ratio
-
-    widths = []
-    for (key, case, cropped, aspect, up, kind) in analyzed:
-        if kind == "dash":
-            h_mm = letter_visual_h_mm * DASH_SIZE_MULT
-            w_mm = h_mm * aspect
-            max_w_mm = letter_visual_h_mm * DASH_MAX_WIDTH_MULT
-            if w_mm > max_w_mm:
-                scale = max_w_mm / w_mm
-                h_mm *= scale
-                w_mm = max_w_mm
+    # Total width in units of the lowercase glyph height g -- letters, dashes
+    # (at their capped size) and every gap -- so the name lands exactly on target.
+    units = 0.0
+    for kind, art, up in items:
+        if kind == "letter":
+            units += (UPSIZE_MULT if up else 1.0) * art.aspect
+        elif kind == "dash":
+            units += min(DASH_SIZE_MULT * art.aspect, DASH_MAX_WIDTH_MULT)
         else:
-            h_mm = H * UPSIZE_MULT if up else H
-            w_mm = h_mm * aspect
-        widths.append((h_mm, w_mm))
-
-    total_w_mm = sum(w for (h, w) in widths) + gap_mm * (n - 1)
-
-    # solve_height only ever caps from above (largest H that still fits under
-    # target_w_mm). Short names, padded out to REFERENCE_SLOTS for sizing,
-    # can undershoot that target considerably. If so, scale everything up
-    # uniformly to actually reach it, rather than leaving the name looking
-    # lost in a lot of empty space. Scaling H, gap, and every width by the
-    # same factor preserves all relative proportions exactly.
-    if total_w_mm < target_w_mm:
-        scale = target_w_mm / total_w_mm
-        H *= scale
-        gap_mm *= scale
-        letter_visual_h_mm *= scale
-        widths = [(h * scale, w * scale) for (h, w) in widths]
-        total_w_mm = target_w_mm
-
-    x_cursor = ZONE_X0_MM + (ZONE_W_MM - total_w_mm) / 2
+            units += DASH_MAX_WIDTH_MULT
+    units += GAP_MULT * max(0, len(items) - 1)
+    g = target_w_mm / units
 
     baseline_y_mm = ZONE_Y0_MM + BASELINE_FRACTION * ZONE_H_MM
-    center_y_mm = baseline_y_mm - letter_visual_h_mm / 2
+    tallest_mult = UPSIZE_MULT if any(up for _, up in letters) else 1.0
+    g = min(g, (baseline_y_mm - ZONE_Y0_MM) / tallest_mult)  # capitals stay inside the zone
+    gap_mm = GAP_MULT * g
+
+    sizes = []  # (w_mm, h_mm) -- h is the GLYPH height for letters
+    for kind, art, up in items:
+        if kind == "letter":
+            h_mm = g * (UPSIZE_MULT if up else 1.0)
+            w_mm = h_mm * art.aspect
+        elif kind == "dash":
+            h_mm = g * DASH_SIZE_MULT
+            w_mm = h_mm * art.aspect
+            max_w_mm = g * DASH_MAX_WIDTH_MULT
+            if w_mm > max_w_mm:
+                h_mm *= max_w_mm / w_mm
+                w_mm = max_w_mm
+        else:
+            h_mm, w_mm = 0.0, g * DASH_MAX_WIDTH_MULT
+        sizes.append((w_mm, h_mm))
+
+    total_w_mm = sum(w for w, _ in sizes) + gap_mm * (len(sizes) - 1)
+    x_cursor = ZONE_X0_MM + (ZONE_W_MM - total_w_mm) / 2
+    dash_center_y_mm = baseline_y_mm - g / 2
 
     doc = fitz.open(spread_path)
     page = doc[0]
-    for (key, case, cropped, aspect, up, kind), (h_mm, w_mm) in zip(analyzed, widths):
-        if kind == "dash":
-            top_y_mm = center_y_mm - h_mm / 2
-            bottom_y_mm = center_y_mm + h_mm / 2
-        else:
-            top_y_mm = baseline_y_mm - h_mm
-            bottom_y_mm = baseline_y_mm
-        rect = fitz.Rect(x_cursor * MM_TO_PT, top_y_mm * MM_TO_PT,
-                          (x_cursor + w_mm) * MM_TO_PT, bottom_y_mm * MM_TO_PT)
-        import io
-        buf = io.BytesIO()
-        cropped.save(buf, format="PNG")
-        page.insert_image(rect, stream=buf.getvalue())
+    for (kind, art, up), (w_mm, h_mm) in zip(items, sizes):
+        if kind == "letter":
+            draw_hanging_letter(page, art, x_cursor, h_mm, baseline_y_mm, THREAD_TOP_Y_MM, MM_TO_PT)
+        elif kind == "dash":
+            draw_centered_piece(page, art, x_cursor, w_mm, h_mm, dash_center_y_mm, MM_TO_PT)
         x_cursor += w_mm + gap_mm
 
     doc.save(out_path)
     doc.close()
-    print(f"Saved {out_path}: H={H:.1f}mm gap={gap_mm:.1f}mm total_w={total_w_mm:.1f}mm (zone={ZONE_W_MM:.1f}mm)")
+    print(f"Saved {out_path}: lowercase glyph={g:.1f}mm gap={gap_mm:.1f}mm "
+          f"total_w={total_w_mm:.1f}mm (target={target_w_mm:.1f}mm, zone={ZONE_W_MM:.1f}mm)")
 
 
 if __name__ == "__main__":

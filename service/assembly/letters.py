@@ -4,10 +4,9 @@ caption text, generalized to work for any name (not just the test case).
 """
 
 import fitz
-from PIL import Image
-import numpy as np
 import openpyxl
 from .config import FONT_PLAYPEN
+from .letter_art import load_letter_art, draw_hanging_letter, draw_centered_piece
 
 MM_TO_PT = 72 / 25.4
 BLEED_MM = 3.0
@@ -22,15 +21,16 @@ ZONE_Y0_MM = BLEED_MM + MARGIN_MM
 ZONE_W_MM = PAGE_TRIM_MM - 2 * MARGIN_MM   # 170
 ZONE_H_MM = PAGE_TRIM_MM - 2 * MARGIN_MM   # 170
 
-MAX_TOTAL_H_MM = 400.0
-MIN_TOTAL_H_MM = 60.0
-BASE_GAP_MM = 6.0
 BASELINE_Y_MM = 90.0  # letter bottoms sit exactly here, measured from the true top edge of the page -- confirmed by visual comparison against real spread art, not the 3/8 line
 DASH_BASELINE_REFERENCE_MM = 89.0  # frozen reference so the dash's position doesn't move when BASELINE_Y_MM changes (lowered 6mm from 83.0 per visual check)
-UPPERCASE_MULT = 1.8
-DASH_SIZE_MULT = 0.6   # dash's height relative to the VISIBLE letter glyph (not the full string+letter image)
-DASH_MAX_WIDTH_MULT = 0.8  # dash's max width relative to the visible letter glyph height
-TYPICAL_LETTER_VISUAL_RATIO = 0.17  # visible glyph is roughly this fraction of the full H (rest is string)
+# All sizes below are relative to the LOWERCASE GLYPH height (the illustrated
+# letter only, thread excluded) -- see letter_art.py for why.
+UPPERCASE_MULT = 1.8   # capital glyph height = this x lowercase glyph height
+GAP_MULT = 0.085       # space between letters = this x lowercase glyph height
+DASH_SIZE_MULT = 0.6   # dash height = this x lowercase glyph height
+DASH_MAX_WIDTH_MULT = 0.8  # dash max width = this x lowercase glyph height
+LETTER_TOP_MIN_MM = BLEED_MM + MARGIN_MM  # no glyph may rise above the top margin
+THREAD_TOP_Y_MM = -1.0  # threads are drawn up to here: just past the top (bleed) edge
 DASH_FILENAME = "hyphen-1-u.png"  # single shared file, no gender/variant needed
 REFERENCE_N = 5
 
@@ -93,144 +93,94 @@ def normalize_spread(page):
         page.set_cropbox(fitz.Rect(rect.x0 + trim, rect.y0, rect.x1 - trim, rect.y1))
 
 
-def measure_letter_only_ratio(cropped):
-    """What fraction of this cropped (string+letter) image is actually the
-    visible letter glyph, measured directly from the image rather than
-    assumed -- more accurate than a fixed average constant, especially at
-    larger render sizes where small ratio errors become visible mm-shifts."""
-    arr = np.array(cropped)
-    alpha = arr[:, :, 3]
-    widths = (alpha > 10).sum(axis=1)
-    max_w = widths.max()
-    letter_rows = np.where(widths > max_w * 0.15)[0]
-    letter_top_row = int(letter_rows.min())
-    total_h = cropped.height
-    return (total_h - letter_top_row) / total_h
-
-
-def analyze_letter(path):
-    im = Image.open(path).convert('RGBA')
-    arr = np.array(im)
-    alpha = arr[:, :, 3]
-    rows_nz = np.where(alpha.max(axis=1) > 10)[0]
-    top_row, bottom_row = int(rows_nz.min()), int(rows_nz.max())
-    cols_nz = np.where(alpha.max(axis=0) > 10)[0]
-    left_col, right_col = int(cols_nz.min()), int(cols_nz.max())
-    cropped = im.crop((left_col, top_row, right_col + 1, bottom_row + 1))
-    return cropped, cropped.width / cropped.height
-
-
-def solve_lowercase_height(items, count_for_sizing):
-    """items: list of (size_mult, aspect) tuples."""
-    for candidate in [x / 10 for x in range(int(MAX_TOTAL_H_MM * 10), int(MIN_TOTAL_H_MM * 10) - 1, -1)]:
-        gap = BASE_GAP_MM * (candidate / MAX_TOTAL_H_MM)
-        total_w = sum(candidate * size_mult * aspect for size_mult, aspect in items) + (count_for_sizing - 1) * gap
-        if total_w <= ZONE_W_MM:
-            return candidate, gap
-    return MIN_TOTAL_H_MM, BASE_GAP_MM * (MIN_TOTAL_H_MM / MAX_TOTAL_H_MM)
-
-
-def size_mult_for(case, kind, actual_letter_ratio=TYPICAL_LETTER_VISUAL_RATIO):
+def size_mult_for(case, kind):
     if kind == "dash":
-        return actual_letter_ratio * DASH_SIZE_MULT
+        return DASH_SIZE_MULT
     return UPPERCASE_MULT if case == "u" else 1.0
 
 
 def compute_fixed_layout(analyzed):
-    """analyzed: list of (key, case, cropped, aspect, variant, kind)."""
+    """
+    analyzed: list of (key, case, art, variant, kind) where art is a LetterArt.
+    Returns (layout, g): layout is one (x0_mm, w_mm, h_mm) per item -- h_mm
+    being the GLYPH height -- and g is the lowercase glyph height in mm.
+
+    The garland is solved in one step: every letter's width is
+    g x size_mult x glyph_aspect, plus a gap proportional to g, so the
+    largest g that fits ZONE_W_MM is a straight division.
+    """
     if not analyzed:
-        return [], MIN_TOTAL_H_MM, TYPICAL_LETTER_VISUAL_RATIO
+        return [], 0.0
 
-    n_total = len(analyzed)
-
-    letter_ratios = [measure_letter_only_ratio(cropped) for (_, _, cropped, _, _, kind) in analyzed if kind != "dash"]
-    actual_letter_ratio = sum(letter_ratios) / len(letter_ratios) if letter_ratios else TYPICAL_LETTER_VISUAL_RATIO
-
-    # Dashes are deliberately excluded from the H-solving pass: they render
-    # tiny and capped (see the draw loop below), so letting them occupy a
-    # real slot + gap here would shrink every other letter just to make
-    # room for something that barely takes any visible space. H is solved
-    # purely from the real letters, exactly as if the dash weren't there;
-    # the dash is positioned afterward without perturbing that result.
-    letters_only = [a for a in analyzed if a[5] != "dash"]
+    # Dashes are deliberately excluded from the sizing pass: they render
+    # tiny and capped (see below), so letting them occupy a real slot + gap
+    # here would shrink every other letter just to make room for something
+    # that barely takes any visible space.
+    letters_only = [a for a in analyzed if a[4] != "dash"]
     n_letters = len(letters_only)
     sizing_n = max(n_letters, REFERENCE_N)
 
-    items_for_sizing = [(size_mult_for(case, kind, actual_letter_ratio), aspect) for (_, case, _, aspect, _, kind) in letters_only]
+    units = [size_mult_for(case, kind) * art.aspect for (_, case, art, _, kind) in letters_only]
     if n_letters < REFERENCE_N:
-        avg_aspect = sum(a for (_, a) in items_for_sizing) / len(items_for_sizing)
-        items_for_sizing += [(1.0, avg_aspect)] * (REFERENCE_N - n_letters)
-    H, gap_mm = solve_lowercase_height(items_for_sizing, sizing_n)
+        # short garlands are sized as if REFERENCE_N letters were there, so the
+        # first pages don't start out huge and then visibly shrink
+        avg_aspect = sum(art.aspect for (_, _, art, _, _) in letters_only) / n_letters
+        units += [avg_aspect] * (REFERENCE_N - n_letters)
+    total_units = sum(units) + (sizing_n - 1) * GAP_MULT
+
+    g = ZONE_W_MM / total_units
+    # never let the tallest glyph rise above the top margin
+    tallest_mult = max(size_mult_for(case, kind) for (_, case, _, _, kind) in letters_only)
+    g = min(g, (BASELINE_Y_MM - LETTER_TOP_MIN_MM) / tallest_mult)
+    gap_mm = GAP_MULT * g
+
     layout = []
     x_cursor = ZONE_X0_MM
-    letter_visual_h_mm = H * actual_letter_ratio
-    for (key, case, cropped, aspect, variant, kind) in analyzed:
+    for (key, case, art, variant, kind) in analyzed:
         if kind == "dash":
-            h_mm = letter_visual_h_mm * DASH_SIZE_MULT
-            w_mm = h_mm * aspect
-            max_w_mm = letter_visual_h_mm * DASH_MAX_WIDTH_MULT
+            h_mm = g * DASH_SIZE_MULT
+            w_mm = h_mm * art.aspect
+            max_w_mm = g * DASH_MAX_WIDTH_MULT
             if w_mm > max_w_mm:
-                scale = max_w_mm / w_mm
-                h_mm *= scale
+                h_mm *= max_w_mm / w_mm
                 w_mm = max_w_mm
         else:
-            h_mm = H * size_mult_for(case, kind, actual_letter_ratio)
-            w_mm = h_mm * aspect
+            h_mm = g * size_mult_for(case, kind)
+            w_mm = h_mm * art.aspect
         layout.append((x_cursor, w_mm, h_mm))
         x_cursor += w_mm + gap_mm
-    return layout, H, actual_letter_ratio
+    return layout, g
 
 
-def draw_accumulation(page, given_items, full_layout, reference_H, actual_letter_ratio, is_night, night_letters_dir):
+def draw_accumulation(page, given_items, full_layout, g, is_night, night_letters_dir):
     import os
-    baseline_y_mm = BASELINE_Y_MM
-    letter_visual_h_mm = reference_H * actual_letter_ratio
     # dash centers on the FROZEN reference, not the current letter baseline,
     # so adjusting BASELINE_Y_MM moves the letters without dragging the dash along
-    dash_center_y_mm = DASH_BASELINE_REFERENCE_MM - letter_visual_h_mm / 2
+    dash_center_y_mm = DASH_BASELINE_REFERENCE_MM - g / 2
 
-    for (key, case, cropped, aspect, variant, kind), (x0_mm, w_mm, h_mm) in zip(given_items, full_layout):
-        use_cropped = cropped
+    for (key, case, art, variant, kind), (x0_mm, w_mm, h_mm) in zip(given_items, full_layout):
+        use_art = art
         if is_night:
             if kind == "dash":
                 night_path = os.path.join(night_letters_dir, DASH_FILENAME)
             else:
                 night_path = os.path.join(night_letters_dir, f"{key}-{case}-{variant}.png")
             if os.path.exists(night_path):
-                use_cropped, _ = analyze_letter(night_path)
+                use_art = load_letter_art(night_path)
             else:
                 print(f"[warning] no white-string asset for {key}-{case}-{variant} "
                       f"(kind={kind}) at {night_path}, using day version on night page")
 
-        # Recompute width from whichever image is ACTUALLY being drawn (day or
-        # night), not the aspect baked into full_layout during the day-only
-        # layout pass. Night-variant strings are often trimmed to a different
-        # length than their day counterparts, so day-based and night-based
-        # aspect ratios can differ per letter. fitz's insert_image defaults to
-        # keep_proportion=True, which preserves the INSERTED image's own aspect
-        # rather than stretching to fill the rect -- if the rect's aspect
-        # doesn't match, fitz shrinks + centers the image inside it, quietly
-        # lifting its bottom edge off the baseline by a per-letter amount.
-        # Recomputing the width here keeps the rect's aspect always in sync
-        # with the actual image, so the bottom always lands exactly on baseline.
-        actual_aspect = use_cropped.width / use_cropped.height
-        w_mm = h_mm * actual_aspect
-
         if kind == "dash":
             # vertically centered in the gap, not baseline-anchored, no string
-            top_y_mm = dash_center_y_mm - h_mm / 2
-            bottom_y_mm = dash_center_y_mm + h_mm / 2
+            w = h_mm * use_art.aspect
+            draw_centered_piece(page, use_art, x0_mm, w, h_mm, dash_center_y_mm, MM_TO_PT)
         else:
-            top_y_mm = baseline_y_mm - h_mm
-            bottom_y_mm = baseline_y_mm
-
-        rect = fitz.Rect(x0_mm * MM_TO_PT, top_y_mm * MM_TO_PT,
-                          (x0_mm + w_mm) * MM_TO_PT, bottom_y_mm * MM_TO_PT)
-
-        import io
-        buf = io.BytesIO()
-        use_cropped.save(buf, format="PNG")
-        page.insert_image(rect, stream=buf.getvalue())
+            # Sized by GLYPH height, so the day and night files of the same
+            # letter come out identical even though their threads are trimmed
+            # differently; the thread is lengthened to reach the top edge.
+            draw_hanging_letter(page, use_art, x0_mm, h_mm, BASELINE_Y_MM,
+                                THREAD_TOP_Y_MM, MM_TO_PT)
 
 
 def insert_caption(page, text, side, color=TEXT_COLOR_DAY):
@@ -339,8 +289,7 @@ def build_letter_sequence(asset_root, letter_variants, gender, out_dir, caption_
 
     analyzed_all = []
     for key, case, variant, path, kind in name_sequence:
-        cropped, aspect = analyze_letter(path)
-        analyzed_all.append((key, case, cropped, aspect, variant, kind))
+        analyzed_all.append((key, case, load_letter_art(path), variant, kind))
 
     os.makedirs(out_dir, exist_ok=True)
     output_paths = []
@@ -382,9 +331,9 @@ def build_letter_sequence(asset_root, letter_variants, gender, out_dir, caption_
         normalize_spread(give_page)
         given_so_far = analyzed_all[:given_count]
         if given_so_far:
-            page_layout, page_H, page_ratio = compute_fixed_layout(given_so_far)
+            page_layout, page_g = compute_fixed_layout(given_so_far)
             draw_accumulation(give_page, given_so_far, page_layout,
-                               page_H, page_ratio, is_night, night_letters_dir)
+                               page_g, is_night, night_letters_dir)
         side = "left" if not first_give_done else "right"
         insert_caption(give_page, row["give_text"].replace("\\n", "\n"), side, text_color)
         first_give_done = True
