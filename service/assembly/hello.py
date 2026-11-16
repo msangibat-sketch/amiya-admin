@@ -32,7 +32,7 @@ def fit_font_size(text, max_width_pt, fontfile):
 HELLO_TEXT_COLOR = (0.5529, 0.7843, 0.9333)  # #8dc8ee, exact Canva match
 
 
-def build_hello_test(spread_path, name, out_path):
+def build_hello_test(spread_path, name, out_path, text_color=None):
     text = f"Сайн уу, {name}!"
     doc = fitz.open(spread_path)
     page = doc[0]
@@ -45,7 +45,7 @@ def build_hello_test(spread_path, name, out_path):
     x_start = ((BOX_X0 + BOX_X1) / 2) * MM_TO_PT - text_w_pt / 2
     baseline_y_pt = BOX_Y0 * MM_TO_PT + fs
 
-    text_color = HELLO_TEXT_COLOR
+    text_color = text_color or HELLO_TEXT_COLOR
 
     page.insert_text(
         fitz.Point(x_start, baseline_y_pt),

@@ -60,7 +60,9 @@ def stitch_all(asset_root, name, gender, dedication_text, photo_path,
     # 1. Hello spread
     print(f"[{name}] building hello spread...")
     hello_out = os.path.join(out_dir, "01_hello.pdf")
-    build_hello_test(os.path.join(spreads_dir, f"hello_{gender}.pdf"), name, hello_out)
+    from .editions import style_for
+    build_hello_test(os.path.join(spreads_dir, f"hello_{gender}.pdf"), name, hello_out,
+                     text_color=style_for(asset_root).get("hello_color"))
     piece_paths.append(hello_out)
     print(f"[{name}] hello done -> {hello_out} (exists: {os.path.exists(hello_out)})")
 

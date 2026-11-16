@@ -33,6 +33,12 @@ EDITIONS = (CLASSIC, NEW_YEAR)
 COVER_COLORS = ("blue", "green", "red")
 OVERLAY_DIR = "newyear"
 
+# Per-edition look. hello_color: the "Сайн уу, <name>!" greeting on the
+# hello page (classic: light blue #8dc8ee, set in hello.py).
+STYLES = {
+    NEW_YEAR: {"hello_color": (0x5B / 255, 0x81 / 255, 0x61 / 255)},  # #5b8161, the sage green of the New Year hello art
+}
+
 _built = {}
 _lock = threading.Lock()
 
@@ -69,6 +75,15 @@ def asset_root_for(asset_root, edition=CLASSIC, cover_color=None, editions_root=
         if key not in _built:
             _built[key] = _build(asset_root, overlay, color, os.path.join(editions_root, f"new_year_{color}"))
         return _built[key]
+
+
+def style_for(asset_root):
+    """The edition style for an asset folder returned by asset_root_for
+    (empty for classic)."""
+    for root in _built.values():
+        if os.path.realpath(root) == os.path.realpath(asset_root):
+            return STYLES[NEW_YEAR]
+    return {}
 
 
 def _link(src, dst):
