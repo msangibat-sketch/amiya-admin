@@ -125,6 +125,92 @@ function StatusPill({ status }) {
   );
 }
 
+// ── Edition: classic, or the New Year special edition in one of three
+// cover colors. Shown as a tag on every New Year order so a book is never
+// packed with the wrong cover.
+const COVER_COLORS = { blue: '#1f3f8f', green: '#1e5a3c', red: '#a3161f' };
+const COVER_COLOR_LABELS = { blue: 'Blue', green: 'Green', red: 'Red' };
+
+function isNewYear(order) { return order.edition === 'new_year'; }
+function editionProblem(order) {
+  return isNewYear(order) && !COVER_COLORS[order.cover_color]
+    ? 'New Year order has no cover color -- set it before generating.' : null;
+}
+
+function EditionTag({ order }) {
+  if (!isNewYear(order)) return null;
+  const color = COVER_COLORS[order.cover_color];
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: "'Comfortaa', cursive", fontWeight: 700,
+      fontSize: 11, padding: '4px 10px', borderRadius: 100, whiteSpace: 'nowrap',
+      background: color ? `${color}1A` : `${THEME.danger}1A`, color: color || THEME.danger,
+    }}>
+      🎄 New Year · {color ? COVER_COLOR_LABELS[order.cover_color] : 'NO COLOR'}
+      {color && <span style={{ width: 10, height: 10, borderRadius: '50%', background: color }} />}
+    </span>
+  );
+}
+
+function EditionSection({ order, onChanged }) {
+  const [editing, setEditing] = useState(false);
+  const [edition, setEdition] = useState(order.edition || 'classic');
+  const [color, setColor] = useState(order.cover_color || '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function handleSave() {
+    if (edition === 'new_year' && !color) { setError('Pick a cover color'); return; }
+    setSaving(true);
+    setError(null);
+    const patch = { edition, cover_color: edition === 'new_year' ? color : null };
+    const { error: err } = await supabase.from('orders').update(patch).eq('id', order.id);
+    setSaving(false);
+    if (err) { setError(err.message); return; }
+    setEditing(false);
+    onChanged(patch);
+  }
+
+  if (!editing) {
+    return (
+      <p style={{ margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <strong style={{ color: THEME.textMid }}>Edition:</strong>
+        {isNewYear(order) ? <EditionTag order={order} /> : 'Classic'}
+        <Button variant="ghost" onClick={() => {
+          setEdition(order.edition || 'classic'); setColor(order.cover_color || ''); setEditing(true);
+        }}>Edit</Button>
+      </p>
+    );
+  }
+
+  const selectStyle = { ...inputStyle, width: 'auto', marginBottom: 8, marginRight: 8, display: 'inline-block', padding: '7px 12px' };
+  return (
+    <div style={{ margin: '0 0 12px', padding: 14, borderRadius: 14, background: THEME.cream2, maxWidth: 400 }}>
+      <label style={labelStyle}>Edition</label>
+      <select style={selectStyle} value={edition} onChange={(e) => setEdition(e.target.value)}>
+        <option value="classic">Classic</option>
+        <option value="new_year">New Year</option>
+      </select>
+      {edition === 'new_year' && (
+        <select style={selectStyle} value={color} onChange={(e) => setColor(e.target.value)}>
+          <option value="">Cover color…</option>
+          {Object.keys(COVER_COLORS).map((c) => <option key={c} value={c}>{COVER_COLOR_LABELS[c]}</option>)}
+        </select>
+      )}
+      {order.print_pdf_url && (
+        <p style={{ fontSize: 12, color: THEME.danger, margin: '0 0 8px' }}>
+          Regenerate the book and cover after changing this.
+        </p>
+      )}
+      {error && <p style={{ fontSize: 12, color: THEME.danger, margin: '0 0 8px' }}>{error}</p>}
+      <div style={{ display: 'flex', gap: 10 }}>
+        <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save edition'}</Button>
+        <Button variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
+      </div>
+    </div>
+  );
+}
+
 function useAnimalNames() {
   const [animalNames, setAnimalNames] = useState({});
   useEffect(() => {
@@ -292,6 +378,8 @@ function NewOrderForm({ onCreated, onCancel }) {
     child_name: '',
     gender: 'girl',
     tier: 'essential',
+    edition: 'classic',
+    cover_color: '',
     dedication_text: '',
     photo_url: '',
     recipient_name: '',
@@ -339,6 +427,7 @@ function NewOrderForm({ onCreated, onCancel }) {
       ...form,
       selling_price: form.selling_price === '' ? null : Number(form.selling_price),
       cost: form.cost === '' ? null : Number(form.cost),
+      cover_color: form.edition === 'new_year' && form.cover_color ? form.cover_color : null,
       letter_variants,
       status: 'new',
     }]);
@@ -379,6 +468,21 @@ function NewOrderForm({ onCreated, onCancel }) {
         <option value="signature">Signature</option>
         <option value="premium">Premium</option>
       </select>
+
+      <label style={labelStyle}>Edition</label>
+      <select style={inputStyle} value={form.edition} onChange={(e) => update('edition', e.target.value)}>
+        <option value="classic">Classic</option>
+        <option value="new_year">New Year</option>
+      </select>
+      {form.edition === 'new_year' && (
+        <>
+          <label style={labelStyle}>Cover color</label>
+          <select style={inputStyle} required value={form.cover_color} onChange={(e) => update('cover_color', e.target.value)}>
+            <option value="">Choose…</option>
+            {Object.keys(COVER_COLORS).map((c) => <option key={c} value={c}>{COVER_COLOR_LABELS[c]}</option>)}
+          </select>
+        </>
+      )}
 
       <label style={labelStyle}>Dedication text</label>
       <textarea style={{ ...inputStyle, height: 100, fontFamily: "'Nunito', sans-serif" }} value={form.dedication_text}
@@ -431,10 +535,11 @@ function NewOrderForm({ onCreated, onCancel }) {
 function OrderList({ onSelect, onNewOrder }) {
   const [orders, setOrders] = useState([]);
   const [filter, setFilter] = useState('all');
+  const [editionFilter, setEditionFilter] = useState('all');
 
   useEffect(() => {
     loadOrders();
-  }, [filter]);
+  }, [filter, editionFilter]);
 
   async function loadOrders() {
     let query = supabase.from('orders').select('*').order('created_at', { ascending: false });
@@ -444,6 +549,9 @@ function OrderList({ onSelect, onNewOrder }) {
     // visible by explicitly selecting that filter.
     if (filter === 'all') query = query.neq('status', 'pending_payment');
     else query = query.eq('status', filter);
+    if (editionFilter === 'classic') query = query.neq('edition', 'new_year');
+    else if (editionFilter === 'new_year') query = query.eq('edition', 'new_year');
+    else if (editionFilter !== 'all') query = query.eq('edition', 'new_year').eq('cover_color', editionFilter);
     const { data } = await query;
     setOrders(data || []);
   }
@@ -472,6 +580,8 @@ function OrderList({ onSelect, onNewOrder }) {
         'Child name': o.child_name,
         'Gender': o.gender,
         'Tier': o.tier,
+        'Edition': isNewYear(o) ? 'New Year' : 'Classic',
+        'Cover color': isNewYear(o) ? (COVER_COLOR_LABELS[o.cover_color] || 'MISSING') : '',
         'Status': statusLabel(o.status),
         'Letter variants': lettersStr,
         'Dedication text': o.dedication_text,
@@ -495,7 +605,7 @@ function OrderList({ onSelect, onNewOrder }) {
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Orders');
 
     const dateStr = new Date().toISOString().slice(0, 10);
-    const filterSuffix = filter === 'all' ? 'all' : filter;
+    const filterSuffix = (filter === 'all' ? 'all' : filter) + (editionFilter === 'all' ? '' : `-${editionFilter}`);
     XLSX.writeFile(workbook, `amiya-orders-${filterSuffix}-${dateStr}.xlsx`);
   }
 
@@ -504,6 +614,7 @@ function OrderList({ onSelect, onNewOrder }) {
   return (
     <div>
       <div style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
         <select value={filter} onChange={(e) => setFilter(e.target.value)}
                 style={{ ...inputStyle, width: 'auto', marginBottom: 0, padding: '9px 14px' }}>
           <option value="all">All statuses</option>
@@ -511,6 +622,14 @@ function OrderList({ onSelect, onNewOrder }) {
             <option key={s} value={s}>{statusLabel(s)}</option>
           ))}
         </select>
+        <select value={editionFilter} onChange={(e) => setEditionFilter(e.target.value)}
+                style={{ ...inputStyle, width: 'auto', marginBottom: 0, marginLeft: 10, padding: '9px 14px' }}>
+          <option value="all">All editions</option>
+          <option value="classic">Classic</option>
+          <option value="new_year">🎄 New Year (all colors)</option>
+          {Object.keys(COVER_COLORS).map((c) => <option key={c} value={c}>🎄 New Year · {COVER_COLOR_LABELS[c]}</option>)}
+        </select>
+        </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <Button variant="secondary" onClick={exportToExcel} disabled={!orders.length}>
             Export to Excel
@@ -537,7 +656,10 @@ function OrderList({ onSelect, onNewOrder }) {
                   onMouseEnter={(e) => e.currentTarget.style.background = THEME.cream}
                   onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
                 <td style={{ padding: '14px 16px', fontWeight: 600 }}>{o.order_number}</td>
-                <td style={{ padding: '14px 16px' }}>{o.child_name} ({o.gender})</td>
+                <td style={{ padding: '14px 16px' }}>
+                  {o.child_name} ({o.gender})
+                  {isNewYear(o) && <div style={{ marginTop: 4 }}><EditionTag order={o} /></div>}
+                </td>
                 <td style={{ padding: '14px 16px', color: THEME.textMid }}>{o.tier}</td>
                 <td style={{ padding: '14px 16px' }}><StatusPill status={o.status} /></td>
                 <td style={{ padding: '14px 16px', color: THEME.textSoft, fontSize: 13 }}>{new Date(o.created_at).toLocaleDateString()}</td>
@@ -919,6 +1041,10 @@ function DigitalBookUrlSection({ order }) {
   if (book.trim()) p.set('book', book.trim());
   p.set('hearts', '1');
   if (variants) p.set('variants', variants);
+  if (isNewYear(order)) {
+    p.set('edition', 'newyear');
+    if (order.cover_color) p.set('cover', order.cover_color);
+  }
   const url = 'https://book.amiyapublishing.com/?' + p.toString();
 
   function handleCopy() {
@@ -1002,6 +1128,7 @@ function OrderDetail({ order, onBack, onUpdated, onChanged, animalNames }) {
   const [coverError, setCoverError] = useState(null);
 
   async function handleGenerate() {
+    if (editionProblem(order)) { setError(editionProblem(order)); return; }
     setGenerating(true);
     setError(null);
     try {
@@ -1018,6 +1145,8 @@ function OrderDetail({ order, onBack, onUpdated, onChanged, animalNames }) {
           dedication_text: order.dedication_text,
           photo_url: order.photo_url,
           letter_variants: order.letter_variants,
+          edition: order.edition || 'classic',
+          cover_color: isNewYear(order) ? order.cover_color : null,
         }),
       });
       if (!res.ok) {
@@ -1050,6 +1179,7 @@ function OrderDetail({ order, onBack, onUpdated, onChanged, animalNames }) {
   async function handleGenerateCover() {
     // Independent of the interior book -- can be generated any time,
     // doesn't touch order status, doesn't require /generate to have run.
+    if (editionProblem(order)) { setCoverError(editionProblem(order)); return; }
     setGeneratingCover(true);
     setCoverError(null);
     try {
@@ -1060,6 +1190,8 @@ function OrderDetail({ order, onBack, onUpdated, onChanged, animalNames }) {
           order_number: order.order_number,
           child_name: order.child_name,
           gender: order.gender,
+          edition: order.edition || 'classic',
+          cover_color: isNewYear(order) ? order.cover_color : null,
         }),
       });
       if (!res.ok) {
@@ -1094,13 +1226,16 @@ function OrderDetail({ order, onBack, onUpdated, onChanged, animalNames }) {
   return (
     <div>
       <Button variant="ghost" onClick={onBack} style={{ ...buttonStyle('ghost'), paddingLeft: 0, marginBottom: 8 }}>&larr; Back to orders</Button>
-      <h2 style={{ ...heading, fontSize: 26, marginBottom: 20 }}>{order.order_number} — {order.child_name}</h2>
+      <h2 style={{ ...heading, fontSize: 26, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        {order.order_number} — {order.child_name} <EditionTag order={order} />
+      </h2>
 
       <div style={{ ...card, display: 'flex', gap: 40 }}>
         <div style={{ flex: 1 }}>
           <ChildNameSection order={order} onChanged={onChanged} />
           <p style={{ margin: '0 0 8px' }}><strong style={{ color: THEME.textMid }}>Gender:</strong> {order.gender}</p>
           <p style={{ margin: '0 0 8px' }}><strong style={{ color: THEME.textMid }}>Tier:</strong> {order.tier}</p>
+          <EditionSection key={`${order.edition}-${order.cover_color}`} order={order} onChanged={onChanged} />
           {order.promo_code && (
             <p style={{ margin: '0 0 8px' }}><strong style={{ color: THEME.textMid }}>Code used:</strong> {order.promo_code}
               {order.discount_amount != null && <span style={{ color: THEME.textSoft }}> (−₮{Number(order.discount_amount).toLocaleString('en-US')})</span>}</p>
