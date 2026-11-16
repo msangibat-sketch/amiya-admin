@@ -156,6 +156,23 @@ def build_preview(asset_root, child_name, gender, dedication_text, photo_bytes, 
     }
 
 
+def build_cover_images(asset_roots, child_name, gender, work_dir, title_outline=True):
+    """Preview cover image for each of several asset folders, e.g. the
+    three New Year colors: {"red": "data:image/jpeg;base64,...", ...}.
+    Lets the website switch cover colors without building a new preview."""
+    os.makedirs(work_dir, exist_ok=True)
+    name = normalize_name_case(child_name.strip())
+    font_path = os.path.join(next(iter(asset_roots.values())), "fonts", "Nunito-Custom450.ttf")
+    out = {}
+    for key, root in asset_roots.items():
+        path = os.path.join(work_dir, f"cover_{key}.pdf")
+        build_digital_cover_page(name, gender, root, target_w_mm=SPREAD_W_MM / 2,
+                                 target_h_mm=SPREAD_H_MM, out_path=path, dpi=100,
+                                 source_dpi=110, title_outline=title_outline)
+        out[key] = _jpeg_data_url(_watermark(_render(path, COVER_PX), font_path))
+    return out
+
+
 def warm_up(asset_root):
     """Fills the caches a preview needs (captions, blank covers, watermark
     overlays) so the first real preview is as fast as later ones."""

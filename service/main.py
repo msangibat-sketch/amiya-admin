@@ -612,6 +612,14 @@ def preview(req: PreviewRequest, request: Request):
     try:
         result = build_preview(asset_root, name, req.gender, req.dedication_text, photo_bytes, work_dir,
                                title_outline=title_outline(req.edition))
+        # New Year: the cover in all three colors, so the website can switch
+        # colors without building (and counting) a new preview.
+        from assembly.editions import NEW_YEAR, COVER_COLORS
+        if asset_root != ASSET_ROOT:
+            from assembly.preview import build_cover_images
+            roots = {c: asset_root_for(ASSET_ROOT, NEW_YEAR, c) for c in COVER_COLORS}
+            result["covers"] = build_cover_images(roots, name, req.gender, os.path.join(work_dir, "covers"),
+                                                  title_outline=False)
         _log_event("preview_built", req.gender if not req.cover_color else f"{req.gender}-{req.edition}-{req.cover_color}")
         return result
     except UnsupportedLetters as e:
@@ -645,6 +653,14 @@ def _warm_preview():
         from assembly.preview import warm_up
         warm_up(ASSET_ROOT)
         print("[preview] caches warm")
+        # New Year covers (one blank cover per color and gender)
+        from assembly.editions import asset_root_for, NEW_YEAR, COVER_COLORS
+        from assembly.cover import _cover_template_image
+        for color in COVER_COLORS:
+            root = asset_root_for(ASSET_ROOT, NEW_YEAR, color)
+            for gender in ("girl", "boy"):
+                _cover_template_image(os.path.join(root, "covers", f"{gender}_cover.pdf"), 110)
+        print("[preview] New Year covers warm")
     except Exception as e:
         print(f"[preview] warm-up skipped: {e!r}")
 
