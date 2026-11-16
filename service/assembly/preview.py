@@ -129,7 +129,7 @@ def build_preview(asset_root, child_name, gender, dedication_text, photo_bytes, 
                              source_dpi=110, title_outline=title_outline)
     from .editions import style_for
     build_hello_test(os.path.join(spreads, f"hello_{gender}.pdf"), name, p("hello.pdf"),
-                     text_color=style_for(asset_root).get("hello_color"))
+                     layout=style_for(asset_root).get("hello_layout"))
     build_spread2(os.path.join(spreads, "dedication.pdf"), photo_path, dedication_text, p("dedication.pdf"))
     build_spread3(os.path.join(spreads, f"intro_{gender}.pdf"), gender, p("intro.pdf"))
     build_spread4(os.path.join(spreads, f"gathering_{gender}.pdf"), p("gathering.pdf"), gender)

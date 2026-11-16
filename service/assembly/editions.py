@@ -33,11 +33,11 @@ EDITIONS = (CLASSIC, NEW_YEAR)
 COVER_COLORS = ("blue", "green", "red")
 OVERLAY_DIR = "newyear"
 
-# Per-edition look. hello_color: the "Сайн уу, <name>!" greeting on the
-# hello page (classic: light blue #8dc8ee, set in hello.py).
-STYLES = {
-    NEW_YEAR: {"hello_color": (0x5B / 255, 0x81 / 255, 0x61 / 255)},  # #5b8161, the sage green of the New Year hello art
-}
+# Per-edition look. hello_layout: size, position and color of the
+# "Сайн уу, <name>!" greeting on the hello page (see hello.NEWYEAR_LAYOUT).
+def _styles():
+    from .hello import NEWYEAR_LAYOUT
+    return {NEW_YEAR: {"hello_layout": NEWYEAR_LAYOUT}}
 
 _built = {}
 _lock = threading.Lock()
@@ -82,7 +82,7 @@ def style_for(asset_root):
     (empty for classic)."""
     for root in _built.values():
         if os.path.realpath(root) == os.path.realpath(asset_root):
-            return STYLES[NEW_YEAR]
+            return _styles()[NEW_YEAR]
     return {}
 
 
