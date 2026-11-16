@@ -246,6 +246,33 @@ dashboard field or a status value) obviously does.
   differences, no stray spaces — the code does exact-match path lookups,
   not fuzzy search.
 
+## New Year edition
+
+Orders have `edition` (`classic` or `new_year`) and, for New Year,
+`cover_color` (`blue`, `green` or `red`) — see
+`schema/migration_new_year_edition.sql`. `/generate`, `/generate-cover` and
+`/preview` all accept these two fields; leaving them out means classic, so
+older callers keep working.
+
+The New Year art goes in the asset zip under `amiya-assets/newyear/`, using
+the **same filenames** as the classic files it replaces:
+
+```
+newyear/
+├── spreads/   hello_boy.pdf, intro_girl.pdf, ... (only the ones that change)
+└── covers/    boy_cover_blue.pdf  boy_cover_green.pdf  boy_cover_red.pdf
+               girl_cover_blue.pdf girl_cover_green.pdf girl_cover_red.pdf
+```
+
+(The covers folder may also be named `cover/`.) On New Year covers the
+name title is plain white with no colored outline; classic covers keep the
+pink/peach outline. All three colors share the same New Year inside pages. Any file not in
+`newyear/` falls back to the classic one — the startup log's "New Year
+edition" block lists which classic spreads are still being used, and flags
+New Year files whose name doesn't match any classic file (a typo). A New
+Year cover is never replaced by a classic one: a missing cover is an error.
+How it works: `assembly/editions.py`.
+
 ## Website preview (`POST /preview`)
 
 The order site shows parents a preview of their own book before they pay.

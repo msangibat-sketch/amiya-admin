@@ -52,6 +52,8 @@ class GenerateRequest(BaseModel):
     dedication_text: str
     photo_url: str
     letter_variants: List[LetterVariant]
+    edition: str = "classic"            # "classic" | "new_year"
+    cover_color: Optional[str] = None   # "blue" | "green" | "red" (New Year only)
 
 
 class GenerateResponse(BaseModel):
@@ -66,6 +68,8 @@ class GenerateCoverRequest(BaseModel):
     order_number: str
     child_name: str
     gender: str  # "boy" or "girl"
+    edition: str = "classic"
+    cover_color: Optional[str] = None
 
 
 class GenerateCoverResponse(BaseModel):
@@ -91,6 +95,25 @@ def download_photo(photo_url: str, dest_path: str):
     r.raise_for_status()
     with open(dest_path, "wb") as f:
         f.write(r.content)
+
+
+def edition_asset_root(edition, cover_color):
+    """The asset folder for this order's edition (classic, or New Year in
+    one of its three cover colors) -- see assembly/editions.py."""
+    from assembly.editions import asset_root_for, EditionError
+    try:
+        return asset_root_for(ASSET_ROOT, edition, cover_color)
+    except EditionError as e:
+        raise HTTPException(400, str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(500, f"Missing New Year assets: {e}")
+
+
+def title_outline(edition):
+    """Classic covers: white title with a pink/peach outline. New Year
+    covers: plain white, no outline."""
+    from assembly.editions import NEW_YEAR
+    return (edition or "").strip().lower().replace("-", "_") != NEW_YEAR
 
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -289,6 +312,11 @@ def startup():
         p = os.path.join(ASSET_ROOT, "spreads", fixed)
         print(f"  [{'OK' if os.path.exists(p) else 'MISSING'}] spreads/{fixed}")
 
+    print("-- New Year edition --")
+    from assembly.editions import report as edition_report
+    for line in edition_report(ASSET_ROOT):
+        print(line)
+
     print("=" * 50)
 
 
@@ -361,6 +389,7 @@ def generate_book(req: GenerateRequest):
     """
     if req.gender not in ("boy", "girl"):
         raise HTTPException(400, "gender must be 'boy' or 'girl'")
+    asset_root = edition_asset_root(req.edition, req.cover_color)
 
     job_id = str(uuid.uuid4())[:8]
     job_dir = os.path.join(OUTPUT_ROOT, f"{req.order_number}_{job_id}")
@@ -377,7 +406,7 @@ def generate_book(req: GenerateRequest):
     from assembly.letters import SPREAD_W_MM, SPREAD_H_MM
 
     print_pdf_path, digital_skip_pages = stitch_all(
-        asset_root=ASSET_ROOT,
+        asset_root=asset_root,
         name=req.child_name,
         gender=req.gender,
         dedication_text=req.dedication_text,
@@ -388,9 +417,10 @@ def generate_book(req: GenerateRequest):
 
     digital_cover_path = os.path.join(job_dir, "digital_cover.pdf")
     build_digital_cover_page(
-        req.child_name, req.gender, ASSET_ROOT,
+        req.child_name, req.gender, asset_root,
         target_w_mm=SPREAD_W_MM / 2, target_h_mm=SPREAD_H_MM,
         out_path=digital_cover_path,
+        title_outline=title_outline(req.edition),
     )
 
     digital_pdf_path = split_for_digital(
@@ -429,6 +459,7 @@ def generate_cover(req: GenerateCoverRequest):
     """
     if req.gender not in ("boy", "girl"):
         raise HTTPException(400, "gender must be 'boy' or 'girl'")
+    asset_root = edition_asset_root(req.edition, req.cover_color)
 
     job_id = str(uuid.uuid4())[:8]
     job_dir = os.path.join(OUTPUT_ROOT, f"{req.order_number}_{job_id}_cover")
@@ -438,7 +469,8 @@ def generate_cover(req: GenerateCoverRequest):
 
     cover_pdf_path = os.path.join(job_dir, "cover.pdf")
     try:
-        build_cover(req.child_name, req.gender, ASSET_ROOT, cover_pdf_path)
+        build_cover(req.child_name, req.gender, asset_root, cover_pdf_path,
+                    title_outline=title_outline(req.edition))
     except FileNotFoundError as e:
         raise HTTPException(500, f"Missing cover asset: {e}")
     except ValueError as e:
@@ -487,6 +519,8 @@ class PreviewRequest(BaseModel):
     gender: str
     dedication_text: str = ""
     photo_base64: str
+    edition: str = "classic"
+    cover_color: Optional[str] = None
 
 
 class AutopickRequest(BaseModel):
@@ -549,6 +583,13 @@ def preview(req: PreviewRequest, request: Request):
         return _preview_error(503, "disabled")
     if req.gender not in ("boy", "girl"):
         return _preview_error(400, "bad_gender")
+    from assembly.editions import asset_root_for, EditionError
+    try:
+        asset_root = asset_root_for(ASSET_ROOT, req.edition, req.cover_color)
+    except EditionError:
+        return _preview_error(400, "bad_edition")
+    except FileNotFoundError:
+        return _preview_error(503, "edition_unavailable")
     name = req.child_name.strip()
     if not name or len(name) > 25:
         return _preview_error(400, "bad_name")
@@ -569,8 +610,9 @@ def preview(req: PreviewRequest, request: Request):
 
     work_dir = os.path.join(OUTPUT_ROOT, f"preview_{uuid.uuid4().hex[:12]}")
     try:
-        result = build_preview(ASSET_ROOT, name, req.gender, req.dedication_text, photo_bytes, work_dir)
-        _log_event("preview_built", req.gender)
+        result = build_preview(asset_root, name, req.gender, req.dedication_text, photo_bytes, work_dir,
+                               title_outline=title_outline(req.edition))
+        _log_event("preview_built", req.gender if not req.cover_color else f"{req.gender}-{req.edition}-{req.cover_color}")
         return result
     except UnsupportedLetters as e:
         _log_event("preview_unsupported", "".join(e.letters))

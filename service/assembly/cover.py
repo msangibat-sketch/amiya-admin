@@ -95,7 +95,7 @@ def get_spine_width_mm(n_letters):
                       f"need the printer's spine width for this bracket")
 
 
-def draw_title(page, line1, line2, gender, font_path, cx_mm, top_mm):
+def draw_title(page, line1, line2, gender, font_path, cx_mm, top_mm, outline=True):
     """
     Draws the title as real vector text directly on the page -- not a
     rasterized PNG. A rasterized title, even supersampled, is still a
@@ -104,6 +104,9 @@ def draw_title(page, line1, line2, gender, font_path, cx_mm, top_mm):
     a visible staircase. Vector text has no such limit -- it stays
     perfectly smooth at any zoom level or print size, because it's math,
     not pixels.
+
+    outline=False (the New Year covers): plain white letters, no colored
+    outline.
 
     fitz.Page.insert_text's render_mode=2 draws fill+stroke together
     natively (a real PDF text rendering mode). border_width is a
@@ -126,9 +129,13 @@ def draw_title(page, line1, line2, gender, font_path, cx_mm, top_mm):
         x_pt = cx_mm * MM_TO_PT - w_pt / 2
         y_pt = y_mm * MM_TO_PT
         for ch in line:
-            page.insert_text((x_pt, y_pt), ch, fontsize=fontsize, fontfile=font_path,
-                              fontname="lazydog", fill=(1, 1, 1), color=stroke_color,
-                              border_width=border_width, render_mode=2)
+            if outline:
+                page.insert_text((x_pt, y_pt), ch, fontsize=fontsize, fontfile=font_path,
+                                  fontname="lazydog", fill=(1, 1, 1), color=stroke_color,
+                                  border_width=border_width, render_mode=2)
+            else:
+                page.insert_text((x_pt, y_pt), ch, fontsize=fontsize, fontfile=font_path,
+                                  fontname="lazydog", color=(1, 1, 1), render_mode=0)
             x_pt += font.text_length(ch, fontsize=fontsize) + tracking
 
     # insert_text's y is the text BASELINE, not the top -- offset down by
@@ -188,7 +195,7 @@ def _cover_template_image(path, source_dpi):
 
 
 def build_digital_cover_page(child_name, gender, asset_root, target_w_mm, target_h_mm, out_path, dpi=150,
-                             source_dpi=DPI):
+                             source_dpi=DPI, title_outline=True):
     """
     Builds a single flat cover page for the DIGITAL reader (Heyzine) --
     just the front panel of the print cover, with no spine/back
@@ -225,7 +232,7 @@ def build_digital_cover_page(child_name, gender, asset_root, target_w_mm, target
     native_page.insert_image(native_page.rect, filename=front_panel_png)
     os.remove(front_panel_png)
     draw_title(native_page, "МИНИЙ НЭР", child_name.upper(), gender, font_path,
-               cx_mm=front_safe_cx_mm, top_mm=TITLE_TOP_MM)
+               cx_mm=front_safe_cx_mm, top_mm=TITLE_TOP_MM, outline=title_outline)
     lx0_mm = front_safe_cx_mm - LOGO_W_MM / 2
     ly0_mm = LOGO_TOP_MM
     lrect = fitz.Rect(lx0_mm * MM_TO_PT, ly0_mm * MM_TO_PT,
@@ -273,7 +280,7 @@ def build_digital_cover_page(child_name, gender, asset_root, target_w_mm, target
     return out_path
 
 
-def build_cover(child_name, gender, asset_root, out_path):
+def build_cover(child_name, gender, asset_root, out_path, title_outline=True):
     n_letters = len(child_name.replace("-", ""))
     spine_width_mm, total_pages = get_spine_width_mm(n_letters)
 
@@ -296,7 +303,7 @@ def build_cover(child_name, gender, asset_root, out_path):
     os.remove(resized_bg_png)
 
     draw_title(page, "МИНИЙ НЭР", child_name.upper(), gender, font_path,
-               cx_mm=front_safe_cx_mm, top_mm=TITLE_TOP_MM)
+               cx_mm=front_safe_cx_mm, top_mm=TITLE_TOP_MM, outline=title_outline)
 
     for cx_mm in (back_safe_cx_mm, front_safe_cx_mm):
         lx0_mm = cx_mm - LOGO_W_MM / 2

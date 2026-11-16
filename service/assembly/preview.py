@@ -100,7 +100,7 @@ def _save_photo(photo_bytes, path):
     img.save(path, format="JPEG", quality=90)
 
 
-def build_preview(asset_root, child_name, gender, dedication_text, photo_bytes, work_dir):
+def build_preview(asset_root, child_name, gender, dedication_text, photo_bytes, work_dir, title_outline=True):
     """
     Returns {
       "pages":   [{"kind": "cover"|"hello"|..., "image": "data:image/jpeg;base64,..."}],
@@ -126,7 +126,7 @@ def build_preview(asset_root, child_name, gender, dedication_text, photo_bytes, 
 
     build_digital_cover_page(name, gender, asset_root, target_w_mm=SPREAD_W_MM / 2,
                              target_h_mm=SPREAD_H_MM, out_path=p("cover.pdf"), dpi=100,
-                             source_dpi=110)
+                             source_dpi=110, title_outline=title_outline)
     build_hello_test(os.path.join(spreads, f"hello_{gender}.pdf"), name, p("hello.pdf"))
     build_spread2(os.path.join(spreads, "dedication.pdf"), photo_path, dedication_text, p("dedication.pdf"))
     build_spread3(os.path.join(spreads, f"intro_{gender}.pdf"), gender, p("intro.pdf"))
