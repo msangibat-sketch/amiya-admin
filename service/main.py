@@ -268,6 +268,10 @@ def startup():
         import threading as _t
         _t.Thread(target=_warm_preview, daemon=True).start()
 
+    # delete generated book files 7 days after they're made (cleanup.py)
+    from cleanup import start_background as _start_cleanup
+    _start_cleanup(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
     print("=" * 50)
     print("ASSET VERIFICATION AT STARTUP")
     print("=" * 50)

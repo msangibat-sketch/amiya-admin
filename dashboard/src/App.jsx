@@ -1290,6 +1290,10 @@ function OrderDetail({ order, onBack, onUpdated, onChanged, animalNames }) {
             Download cover PDF →
           </a>
         )}
+        <p style={{ fontSize: 12, color: THEME.textMid, margin: '4px 0 0' }}>
+          Book and cover PDFs are deleted from storage 7 days after they're made. Save them to your computer;
+          you can always regenerate them from this order. The digital book keeps working.
+        </p>
       </div>
     </div>
   );
