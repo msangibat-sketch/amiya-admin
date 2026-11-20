@@ -306,6 +306,10 @@ def startup():
         print(f"  [{'OK' if os.path.exists(p) else 'MISSING'}] spreads/night_scene_{gender}.pdf")
         p = os.path.join(ASSET_ROOT, "covers", f"{gender}_cover.pdf")
         print(f"  [{'OK' if os.path.exists(p) else 'MISSING'}] covers/{gender}_cover.pdf")
+        from assembly.letters import extra_unit_numbers
+        n_extra = len(extra_unit_numbers(os.path.join(ASSET_ROOT, "spreads"), gender))
+        print(f"  [{'OK' if n_extra else 'MISSING'}] spreads/spread-extra-N-meet/give-{gender}.pdf -- "
+              f"{n_extra} meet+give pair(s) (needed for names under 5 letters)")
 
     for f in ["Lazydog-Regular.ttf"]:
         p = os.path.join(ASSET_ROOT, "fonts", f)

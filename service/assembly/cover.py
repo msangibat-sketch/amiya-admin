@@ -83,7 +83,10 @@ SPINE_TABLE_MM = {
 
 
 def get_spine_width_mm(n_letters):
-    pages = calc_total_pages(n_letters)
+    # names under MIN_NAME_LETTERS get extra spreads up to that length
+    # (see letters.py), so the book is never thinner than that
+    from .letters import MIN_NAME_LETTERS
+    pages = calc_total_pages(max(n_letters, MIN_NAME_LETTERS))
     if pages in SPINE_TABLE_MM:
         return SPINE_TABLE_MM[pages], pages
     known_pages = sorted(SPINE_TABLE_MM)

@@ -34,6 +34,113 @@ THREAD_TOP_Y_MM = -1.0  # threads are drawn up to here: just past the top (bleed
 DASH_FILENAME = "hyphen-1-u.png"  # single shared file, no gender/variant needed
 REFERENCE_N = 5
 
+# ---- minimum book length ----
+# Every book is built as if the name had at least MIN_NAME_LETTERS letters.
+# A shorter name gets "extra" units in the place of the missing letters.
+# An extra unit works like a letter: a MEET spread (e.g. the sun meets the
+# child) and a GIVE spread (the sun says something kind instead of giving a
+# letter). Units go BETWEEN the name's letters, never two side by side.
+#
+# Files, named like the letter spreads with key "extra" and the unit number
+# in place of the variant:
+#     spreads/spread-extra-1-meet-{gender}.pdf   spreads/spread-extra-1-give-{gender}.pdf
+#     spreads/spread-extra-2-meet-{gender}.pdf   spreads/spread-extra-2-give-{gender}.pdf  ...
+# The 1st unit a name needs uses extra-1, the 2nd uses extra-2, and so on;
+# if a name needs more units than exist, they're reused from extra-1.
+#
+# Text: if caption_text.xlsx has a row with key "extra", variant <unit
+# number> and the gender, its meet_text_left / meet_text_right / give_text
+# (and night_day) are written on the spreads exactly like a letter's.
+# With no row, the spreads are used as they are (text in the artwork).
+# The give spread shows no letter garland.
+MIN_NAME_LETTERS = 5
+EXTRA_KEY = "extra"
+
+
+def extra_units_needed(n_letters):
+    return max(0, MIN_NAME_LETTERS - n_letters)
+
+
+def extra_unit_positions(n_letters, n_extra):
+    """
+    Where the extra units go: a list of n_extra slot numbers, where slot i
+    means "right after the i-th real letter" (slot 0 = before the first).
+
+    Gaps between letters are used first, spread out evenly, so for 4
+    letters 1 unit goes after letter 2 (Э·в·[extra]·э·л), and for 3 letters
+    the 2 units go after letters 1 and 2 (Э·[extra]·в·[extra]·э). Only a
+    1-2 letter name has too few gaps; then the start and end are used too,
+    and only a 1-letter name ends up with units side by side.
+    """
+    if n_extra <= 0:
+        return []
+    inner = list(range(1, n_letters))          # gaps between letters
+    if n_extra <= len(inner):
+        n = n_letters
+        picks = []
+        for j in range(n_extra):
+            target = round((j + 1) * n / (n_extra + 1))
+            target = min(max(target, 1), n - 1)
+            # nudge to a free gap, keeping them apart
+            while target in picks:
+                target += 1
+                if target > n - 1:
+                    target = next(g for g in inner if g not in picks)
+            picks.append(target)
+        return sorted(picks)
+    slots = list(range(0, n_letters + 1))      # include before-first / after-last
+    return sorted(slots[i % len(slots)] for i in range(n_extra))
+
+
+def extra_unit_numbers(spreads_dir, gender):
+    """Unit numbers that have both a meet and a give file: [1, 2, ...]."""
+    import os
+    nums = []
+    n = 1
+    while all(os.path.exists(os.path.join(spreads_dir, f"spread-{EXTRA_KEY}-{n}-{kind}-{gender}.pdf"))
+              for kind in ("meet", "give")):
+        nums.append(n)
+        n += 1
+    return nums
+
+
+def build_extra_unit(spreads_dir, gender, unit_idx, out_dir, page_tag, caption_data, give_side):
+    """The meet + give spreads for one extra unit."""
+    import os
+    nums = extra_unit_numbers(spreads_dir, gender)
+    if not nums:
+        raise FileNotFoundError(
+            f"This name is shorter than {MIN_NAME_LETTERS} letters, so the book needs extra spreads, "
+            f"but none were found. Expected spreads/spread-{EXTRA_KEY}-1-meet-{gender}.pdf and "
+            f"spread-{EXTRA_KEY}-1-give-{gender}.pdf")
+    n = nums[unit_idx % len(nums)]
+    row = caption_data.get((EXTRA_KEY, str(n), gender))
+    is_night = row is not None and str(row.get("night_day", "day")).strip().lower() == "night"
+    color = TEXT_COLOR_NIGHT if is_night else TEXT_COLOR_DAY
+
+    def text(field):
+        v = (row or {}).get(field)
+        return str(v).replace("\\n", "\n") if v else None
+
+    out = []
+    for kind in ("meet", "give"):
+        doc = fitz.open(os.path.join(spreads_dir, f"spread-{EXTRA_KEY}-{n}-{kind}-{gender}.pdf"))
+        page = doc[0]
+        normalize_spread(page)
+        if kind == "meet":
+            if text("meet_text_left"):
+                insert_caption(page, text("meet_text_left"), "left", color)
+            if text("meet_text_right"):
+                insert_caption(page, text("meet_text_right"), "right", color)
+        elif text("give_text"):
+            insert_caption(page, text("give_text"), give_side, color)
+        dst = os.path.join(out_dir, f"letter_{page_tag}_extra_{kind}.pdf")
+        doc.save(dst)
+        doc.close()
+        out.append(dst)
+    return out
+
+
 # ---- text ----
 FONT_PATH = FONT_PLAYPEN
 FONT_SIZE = 18
@@ -255,7 +362,8 @@ def resolve_spread_path(spreads_dir, key, case, variant, kind, gender):
     )
 
 
-def build_letter_sequence(asset_root, letter_variants, gender, out_dir, caption_xlsx_path=None, max_letters=None):
+def build_letter_sequence(asset_root, letter_variants, gender, out_dir, caption_xlsx_path=None, max_letters=None,
+                          with_extras=False):
     """
     letter_variants: list of dicts [{"key":"a","case":"u","variant":"1"}, ...]
     representing the child's name in order. A dash is represented as
@@ -269,6 +377,10 @@ def build_letter_sequence(asset_root, letter_variants, gender, out_dir, caption_
     max_letters: stop after this many letters (the website preview builds
     only the first two). The pages it does build are identical to the full
     book's, since each give spread's garland only uses letters given so far.
+
+    with_extras: add the extra spreads a name shorter than MIN_NAME_LETTERS
+    needs (see extra_unit_positions). On for the real book; off for the
+    website preview, which only shows the first letters.
     """
     import os
     spreads_dir = os.path.join(asset_root, "spreads")
@@ -293,8 +405,23 @@ def build_letter_sequence(asset_root, letter_variants, gender, out_dir, caption_
 
     os.makedirs(out_dir, exist_ok=True)
     output_paths = []
+
+    n_real = sum(1 for item in name_sequence if item[4] != "dash")
+    extra_slots = extra_unit_positions(n_real, extra_units_needed(n_real)) if with_extras else []
+    extra_done = 0
+
+    def add_extras_at(slot):
+        nonlocal extra_done
+        while extra_done < len(extra_slots) and extra_slots[extra_done] == slot:
+            print(f"[extra] adding extra unit {extra_done + 1} after letter {slot}")
+            output_paths.extend(build_extra_unit(spreads_dir, gender, extra_done, out_dir,
+                                                 f"{slot:02d}_{extra_done}", caption_data,
+                                                 "left" if not first_give_done else "right"))
+            extra_done += 1
+
     given_count = 0
     first_give_done = False
+    add_extras_at(0)
     page_idx = 0
 
     for key, case, variant, _, kind in name_sequence:
@@ -343,5 +470,6 @@ def build_letter_sequence(asset_root, letter_variants, gender, out_dir, caption_
         give_doc.close()
         output_paths.append(give_out)
         page_idx += 1
+        add_extras_at(page_idx)
 
     return output_paths

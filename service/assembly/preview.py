@@ -16,7 +16,7 @@ import fitz
 from PIL import Image, ImageDraw, ImageFont
 
 from .autopick import pick_variants, caption_keys_from
-from .letters import build_letter_sequence, load_caption_data, SPREAD_W_MM, SPREAD_H_MM
+from .letters import build_letter_sequence, load_caption_data, SPREAD_W_MM, SPREAD_H_MM, MIN_NAME_LETTERS
 from .hello import build_hello_test
 from .spread2_dedication import build_spread2
 from .spread3_intro import build_spread3
@@ -151,7 +151,7 @@ def build_preview(asset_root, child_name, gender, dedication_text, photo_bytes, 
     return {
         "pages": pages,
         "locked_letters": name_letters[PREVIEW_LETTERS:],
-        "total_pages": calc_total_pages(len(letters_only)),
+        "total_pages": calc_total_pages(max(len(letters_only), MIN_NAME_LETTERS)),
         "letter_variants": letter_variants,
     }
 

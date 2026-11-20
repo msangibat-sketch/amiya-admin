@@ -91,7 +91,8 @@ def stitch_all(asset_root, name, gender, dedication_text, photo_path,
     # 5. Letter sequence: meet/give pairs + accumulation garland + captions
     print(f"[{name}] building letter sequence ({len(letter_variants)} letters)...")
     letter_dir = os.path.join(out_dir, "letters")
-    letter_pages = build_letter_sequence(asset_root, letter_variants, gender, letter_dir)
+    letter_pages = build_letter_sequence(asset_root, letter_variants, gender, letter_dir,
+                                         with_extras=True)
     piece_paths.extend(letter_pages)
     print(f"[{name}] letter sequence done -> {len(letter_pages)} pages")
 

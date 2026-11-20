@@ -112,6 +112,28 @@ const STATUS_COLORS = {
   delivered: '#4A8F5C',
 };
 
+// Status as a colored dropdown, so it can be changed straight from the
+// order list. Clicks don't open the order.
+function StatusSelect({ status, onChange, disabled }) {
+  const color = STATUS_COLORS[status] || THEME.textSoft;
+  return (
+    <select
+      value={status}
+      disabled={disabled}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => onChange(e.target.value)}
+      style={{
+        fontFamily: "'Comfortaa', cursive", fontWeight: 700, fontSize: 11, letterSpacing: '0.03em',
+        padding: '5px 10px', borderRadius: 100, border: `1.5px solid ${color}55`,
+        background: `${color}1A`, color, cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      {!STATUS_VALUES.includes(status) && <option value={status}>{statusLabel(status)}</option>}
+      {STATUS_VALUES.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
+    </select>
+  );
+}
+
 function StatusPill({ status }) {
   const color = STATUS_COLORS[status] || THEME.textSoft;
   return (
@@ -556,6 +578,20 @@ function OrderList({ onSelect, onNewOrder }) {
     setOrders(data || []);
   }
 
+  const [savingStatusId, setSavingStatusId] = useState(null);
+  const [statusError, setStatusError] = useState(null);
+
+  async function handleListStatusChange(order, newStatus) {
+    setSavingStatusId(order.id);
+    setStatusError(null);
+    const { error } = await supabase.from('orders').update({ status: newStatus }).eq('id', order.id);
+    setSavingStatusId(null);
+    if (error) { setStatusError(`${order.order_number}: status not saved (${error.message})`); return; }
+    // Update the row in place; it stays in view until the next reload even
+    // if it no longer matches the status filter, so it doesn't vanish mid-click.
+    setOrders((list) => list.map((o) => (o.id === order.id ? { ...o, status: newStatus } : o)));
+  }
+
   async function handleDelete(e, order) {
     e.stopPropagation(); // don't trigger the row's onSelect
     const confirmed = window.confirm(
@@ -637,6 +673,7 @@ function OrderList({ onSelect, onNewOrder }) {
           <Button onClick={onNewOrder}>+ New Order</Button>
         </div>
       </div>
+      {statusError && <p style={{ color: THEME.danger, fontSize: 13, margin: '0 0 12px' }}>{statusError}</p>}
       <div style={{ ...card, padding: 0, overflow: 'hidden' }}>
         <table width="100%" cellPadding={0} style={{ borderCollapse: 'collapse' }}>
           <thead>
@@ -661,7 +698,12 @@ function OrderList({ onSelect, onNewOrder }) {
                   {isNewYear(o) && <div style={{ marginTop: 4 }}><EditionTag order={o} /></div>}
                 </td>
                 <td style={{ padding: '14px 16px', color: THEME.textMid }}>{o.tier}</td>
-                <td style={{ padding: '14px 16px' }}><StatusPill status={o.status} /></td>
+                <td style={{ padding: '14px 16px' }}>
+                  {o.status === 'pending_payment' || o.status === 'generating'
+                    ? <StatusPill status={o.status} />
+                    : <StatusSelect status={o.status} disabled={savingStatusId === o.id}
+                                    onChange={(s) => handleListStatusChange(o, s)} />}
+                </td>
                 <td style={{ padding: '14px 16px', color: THEME.textSoft, fontSize: 13 }}>{new Date(o.created_at).toLocaleDateString()}</td>
                 <td style={{ padding: '14px 16px' }}>
                   <Button variant="danger" onClick={(e) => handleDelete(e, o)}>
@@ -677,7 +719,7 @@ function OrderList({ onSelect, onNewOrder }) {
   );
 }
 
-function LetterVariantsSection({ order, animalNames }) {
+function LetterVariantsSection({ order, animalNames, onChanged }) {
   const tokens = parseNameTokens(order.child_name);
   const letters = tokens.filter((t) => t.type === 'letter');
   const initialEntries = (order.letter_variants || []).filter((v) => v.key !== '-');
@@ -694,6 +736,7 @@ function LetterVariantsSection({ order, animalNames }) {
   );
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
+  const [saveError, setSaveError] = useState(null);
 
   if (!letters.length) return null;
 
@@ -708,9 +751,12 @@ function LetterVariantsSection({ order, animalNames }) {
   async function handleSave() {
     setSaving(true);
     const letter_variants = buildLetterVariants(tokens, variantValues);
-    await supabase.from('orders').update({ letter_variants }).eq('id', order.id);
+    const { error: err } = await supabase.from('orders').update({ letter_variants }).eq('id', order.id);
     setSaving(false);
+    if (err) { setSaveError(err.message); return; }
+    setSaveError(null);
     setEditing(false);
+    onChanged({ letter_variants });
     setSavedEntries(letter_variants.filter((v) => v.key !== '-'));
     setJustSaved(true);
     setTimeout(() => setJustSaved(false), 2500);
@@ -729,6 +775,7 @@ function LetterVariantsSection({ order, animalNames }) {
             <Button variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
           )}
         </div>
+        {saveError && <p style={{ color: THEME.danger, fontSize: 13, marginTop: 8 }}>Not saved: {saveError}</p>}
       </div>
     );
   }
@@ -834,19 +881,22 @@ function ChildNameSection({ order, onChanged }) {
   );
 }
 
-function DedicationSection({ order }) {
+function DedicationSection({ order, onChanged }) {
+  const savedText = order.dedication_text || '';
   const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(order.dedication_text || '');
-  const [savedText, setSavedText] = useState(order.dedication_text || '');
+  const [text, setText] = useState(savedText);
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
+  const [saveError, setSaveError] = useState(null);
 
   async function handleSave() {
     setSaving(true);
-    await supabase.from('orders').update({ dedication_text: text }).eq('id', order.id);
+    const { error: err } = await supabase.from('orders').update({ dedication_text: text }).eq('id', order.id);
     setSaving(false);
+    if (err) { setSaveError(err.message); return; }
+    setSaveError(null);
     setEditing(false);
-    setSavedText(text);
+    onChanged({ dedication_text: text });
     setJustSaved(true);
     setTimeout(() => setJustSaved(false), 2500);
   }
@@ -873,6 +923,7 @@ function DedicationSection({ order }) {
           <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save dedication'}</Button>
           <Button variant="ghost" onClick={handleCancel}>Cancel</Button>
         </div>
+        {saveError && <p style={{ color: THEME.danger, fontSize: 13, marginTop: 8 }}>Not saved: {saveError}</p>}
       </div>
     );
   }
@@ -883,7 +934,7 @@ function DedicationSection({ order }) {
         <strong style={{ color: THEME.textMid }}>Dedication:</strong>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {justSaved && <span style={{ color: '#4A8F5C', fontSize: 13, fontWeight: 600 }}>✓ Saved</span>}
-          <Button variant="secondary" onClick={() => setEditing(true)}>Edit</Button>
+          <Button variant="secondary" onClick={() => { setText(savedText); setEditing(true); }}>Edit</Button>
         </div>
       </div>
       <p style={{ whiteSpace: 'pre-wrap', maxWidth: 400, color: THEME.text, background: THEME.cream, padding: 12, borderRadius: 10, fontSize: 14 }}>{savedText}</p>
@@ -948,8 +999,8 @@ function resizeImageFile(file, maxDim, quality) {
   });
 }
 
-function PhotoSection({ order }) {
-  const [photoUrl, setPhotoUrl] = useState(order.photo_url);
+function PhotoSection({ order, onChanged }) {
+  const photoUrl = order.photo_url;
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
   const [justUploaded, setJustUploaded] = useState(false);
@@ -979,8 +1030,9 @@ function PhotoSection({ order }) {
       }
       const result = await res.json();
 
-      await supabase.from('orders').update({ photo_url: result.photo_url }).eq('id', order.id);
-      setPhotoUrl(result.photo_url);
+      const { error: err } = await supabase.from('orders').update({ photo_url: result.photo_url }).eq('id', order.id);
+      if (err) throw new Error(err.message);
+      onChanged({ photo_url: result.photo_url });
       setJustUploaded(true);
       setTimeout(() => setJustUploaded(false), 2500);
     } catch (err) {
@@ -1011,6 +1063,7 @@ function DigitalBookUrlSection({ order }) {
   const [from, setFrom] = useState('');
   const [book, setBook] = useState(order.heyzine_book_id || '');
   const [copied, setCopied] = useState(false);
+  useEffect(() => { setBook(order.heyzine_book_id || ''); }, [order.heyzine_book_id]);
 
   const tokens = parseNameTokens(order.child_name);
   const letters = tokens.filter((t) => t.type === 'letter');
@@ -1078,7 +1131,7 @@ function DigitalBookUrlSection({ order }) {
   );
 }
 
-function FinancialsPanel({ order }) {
+function FinancialsPanel({ order, onChanged }) {
   const [sellingPrice, setSellingPrice] = useState(order.selling_price ?? '');
   const [cost, setCost] = useState(order.cost ?? '');
   const [saving, setSaving] = useState(false);
@@ -1091,11 +1144,14 @@ function FinancialsPanel({ order }) {
   async function handleSave() {
     setSaving(true);
     setJustSaved(false);
-    await supabase.from('orders').update({
+    const patch = {
       selling_price: sellingPrice === '' ? null : Number(sellingPrice),
       cost: cost === '' ? null : Number(cost),
-    }).eq('id', order.id);
+    };
+    const { error: err } = await supabase.from('orders').update(patch).eq('id', order.id);
     setSaving(false);
+    if (err) { window.alert(`Not saved: ${err.message}`); return; }
+    onChanged(patch);
     setJustSaved(true);
     setTimeout(() => setJustSaved(false), 2500);
   }
@@ -1121,18 +1177,26 @@ function FinancialsPanel({ order }) {
   );
 }
 
-function OrderDetail({ order, onBack, onUpdated, onChanged, animalNames }) {
+function OrderDetail({ order, onBack, onChanged, animalNames }) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState(null);
   const [generatingCover, setGeneratingCover] = useState(false);
   const [coverError, setCoverError] = useState(null);
 
   async function handleGenerate() {
-    if (editionProblem(order)) { setError(editionProblem(order)); return; }
     setGenerating(true);
     setError(null);
+    // Always build from what's saved in the database right now, never from
+    // a copy held by this page -- so the book can't be made with an old
+    // dedication, photo or letter choice.
+    const { data: fresh, error: loadErr } = await supabase.from('orders').select('*').eq('id', order.id).single();
+    if (loadErr || !fresh) { setGenerating(false); setError(`Couldn't load the order: ${loadErr?.message || 'not found'}`); return; }
+    onChanged(fresh);
+    order = fresh;
+    if (editionProblem(order)) { setGenerating(false); setError(editionProblem(order)); return; }
     try {
       await supabase.from('orders').update({ status: 'generating' }).eq('id', order.id);
+      onChanged({ status: 'generating' });
 
       const res = await fetch(`${GENERATION_SERVICE_URL}/generate`, {
         method: 'POST',
@@ -1155,33 +1219,37 @@ function OrderDetail({ order, onBack, onUpdated, onChanged, animalNames }) {
       }
       const result = await res.json();
 
-      await supabase.from('orders').update({
+      const patch = {
         status: 'ready',
         print_pdf_url: result.print_pdf_url,
         digital_pages_url: result.digital_pages_url,
         ...(result.heyzine_book_id ? { heyzine_book_id: result.heyzine_book_id } : {}),
-      }).eq('id', order.id);
-
-      onUpdated();
+      };
+      await supabase.from('orders').update(patch).eq('id', order.id);
+      onChanged(patch);
     } catch (err) {
       setError(err.message);
       await supabase.from('orders').update({ status: 'new' }).eq('id', order.id);
+      onChanged({ status: 'new' });
     } finally {
       setGenerating(false);
     }
   }
 
   async function handleStatusChange(newStatus) {
-    await supabase.from('orders').update({ status: newStatus }).eq('id', order.id);
-    onUpdated();
+    const { error: err } = await supabase.from('orders').update({ status: newStatus }).eq('id', order.id);
+    if (err) { setError(`Status not saved: ${err.message}`); return; }
+    onChanged({ status: newStatus });
   }
 
   async function handleGenerateCover() {
     // Independent of the interior book -- can be generated any time,
     // doesn't touch order status, doesn't require /generate to have run.
-    if (editionProblem(order)) { setCoverError(editionProblem(order)); return; }
     setGeneratingCover(true);
     setCoverError(null);
+    const { data: fresh } = await supabase.from('orders').select('*').eq('id', order.id).single();
+    if (fresh) { onChanged(fresh); order = fresh; }
+    if (editionProblem(order)) { setGeneratingCover(false); setCoverError(editionProblem(order)); return; }
     try {
       const res = await fetch(`${GENERATION_SERVICE_URL}/generate-cover`, {
         method: 'POST',
@@ -1203,8 +1271,7 @@ function OrderDetail({ order, onBack, onUpdated, onChanged, animalNames }) {
       await supabase.from('orders').update({
         cover_pdf_url: result.cover_pdf_url,
       }).eq('id', order.id);
-
-      onUpdated();
+      onChanged({ cover_pdf_url: result.cover_pdf_url });
     } catch (err) {
       setCoverError(err.message);
     } finally {
@@ -1250,15 +1317,15 @@ function OrderDetail({ order, onBack, onUpdated, onChanged, animalNames }) {
               {STATUS_VALUES.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
             </select>
           </p>
-          <DedicationSection order={order} />
+          <DedicationSection order={order} onChanged={onChanged} />
           <p style={{ marginTop: 16 }}><strong style={{ color: THEME.textMid }}>Shipping:</strong> {order.recipient_name}, {order.street_address}, {order.city}, {order.province} — {order.phone}</p>
 
-          <LetterVariantsSection order={order} animalNames={animalNames} />
-          <FinancialsPanel order={order} />
+          <LetterVariantsSection order={order} animalNames={animalNames} onChanged={onChanged} />
+          <FinancialsPanel order={order} onChanged={onChanged} />
           <DigitalBookUrlSection order={order} />
         </div>
         <div>
-          <PhotoSection order={order} />
+          <PhotoSection order={order} onChanged={onChanged} />
         </div>
       </div>
 
@@ -1770,7 +1837,6 @@ export default function App() {
             order={selectedOrder}
             onChanged={(patch) => setSelectedOrder((o) => ({ ...o, ...patch }))}
             onBack={() => { setSelectedOrder(null); setRefreshKey((k) => k + 1); }}
-            onUpdated={() => { setRefreshKey((k) => k + 1); setSelectedOrder(null); }}
             animalNames={animalNames}
           />
         ) : (

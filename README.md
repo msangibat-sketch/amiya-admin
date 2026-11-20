@@ -94,7 +94,10 @@ amiya-assets/
 ├── caption_text.xlsx
 ├── spreads/         hello_{gender}.pdf, gathering_{gender}.pdf,
 │                    spread-{key}-{variant}-meet-{gender}.pdf,
-│                    spread-{key}-{case}-{variant}-give-{gender}.pdf, etc.
+│                    spread-{key}-{case}-{variant}-give-{gender}.pdf,
+│                    spread-extra-{n}-meet-{gender}.pdf + spread-extra-{n}-give-{gender}.pdf
+│                    (n = 1, 2, ...; fill-in pairs for names under 5 letters,
+│                    captions from rows with key "extra" -- see letters.py), etc.
 ├── letters/         {key}-{case}-{variant}.png  (day versions)
 ├── letters_night/   same filenames, white-string night versions
 ├── fonts/           PlaypenSans-Regular.ttf, Nunito-Custom450.ttf,
