@@ -50,15 +50,22 @@ GLYPH_RUN_FRAC = 0.01   # glyph starts at the first run of wide rows at least th
 # below the baseline. Their tops end up a little smaller than other letters. Measured by eye from
 # the art (Nov 2026); the day and night files of a letter share one entry.
 # A NEW letter file that has something sticking out needs an entry here.
-TAILED_HEIGHT = 1.3
+TAILED_HEIGHT = {"u": 1.3, "r": 1.3, "w": 1.5}   # ү needs more: its top came out too small
 
 # Fine-tuning for single drawings that still look too big or small next to
 # the others (e.g. a much chunkier animal). 0.9 = 10% smaller.
 SIZE_TWEAK = {
     "u-l-1": 0.85,   # hippo у -- wide and chunky next to the slim horse у
     "ts-l-1": 0.85,  # red ц -- blocky, looked bigger than its neighbours
+    "w-l-3": 0.85,   # grey ү -- much chunkier than the other ү
+    "j-l-1": 0.85,   # ж -- wide, looked much bigger than other letters
 }
-TAILED = {"u", "w", "r"}
+
+# Tailed letters are hung so their top reaches this share of an ordinary
+# letter's height (1.0 = level with the other letters' tops); the tail
+# hangs below the line by whatever is left.
+TAILED_TOP_REACH = 0.95
+TAILED = set(TAILED_HEIGHT)
 
 BODY_TRIM = {
     # б: bowl is the body, top stroke rises
@@ -107,7 +114,7 @@ class LetterArt:
     """A letter PNG cropped to its visible pixels, with its glyph and thread measured.
     All measurements are in pixels of `image`."""
 
-    def __init__(self, image, glyph_top, gx0, gx1, has_thread, repeat_row, trim=(0, 0), tailed=False, size_tweak=1.0):
+    def __init__(self, image, glyph_top, gx0, gx1, has_thread, repeat_row, trim=(0, 0), tailed=0, size_tweak=1.0):
         self.image = image
         self.w, self.h = image.size
         self.glyph_top = glyph_top          # first row of the glyph (rows above are thread)
@@ -121,7 +128,10 @@ class LetterArt:
         self.body_h = self.body_bottom - self.body_top
         if tailed:
             letter_h = self.h - self.body_top          # whole letter, extras on top excluded
-            self.body_h = letter_h / TAILED_HEIGHT     # so the whole letter = TAILED_HEIGHT x others
+            self.body_h = letter_h / tailed            # so the whole letter = that many x others
+            # hang it so its top is TAILED_TOP_REACH of an ordinary letter
+            # above the baseline (lifts it toward the top line)
+            self.body_bottom = self.body_top + TAILED_TOP_REACH * self.body_h
         self.body_h /= size_tweak
         self.aspect = self.glyph_w / self.body_h    # GLYPH width / BODY height
         # how far the glyph reaches above the baseline, in body heights (>= 1)
@@ -165,7 +175,8 @@ def load_letter_art(path):
     key = _trim_key(path)
     return LetterArt(im, glyph_top, gx0, gx1, has_thread, repeat_row,
                      BODY_TRIM.get(key, (0, 0)),
-                     tailed=key.split("-")[0] in TAILED and "-l-" in key and key in BODY_TRIM,
+                     tailed=(TAILED_HEIGHT.get(key.split("-")[0], 0)
+                             if "-l-" in key and key in BODY_TRIM else 0),
                      size_tweak=SIZE_TWEAK.get(key, 1.0))
 
 
