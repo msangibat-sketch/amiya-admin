@@ -53,7 +53,7 @@ REFERENCE_N = 5
 # (and night_day) are written on the spreads exactly like a letter's.
 # With no row, the spreads are used as they are (text in the artwork).
 # The give spread shows no letter garland.
-MIN_NAME_LETTERS = 5
+MIN_NAME_LETTERS = 4
 EXTRA_KEY = "extra"
 
 
@@ -66,11 +66,10 @@ def extra_unit_positions(n_letters, n_extra):
     Where the extra units go: a list of n_extra slot numbers, where slot i
     means "right after the i-th real letter" (slot 0 = before the first).
 
-    Gaps between letters are used first, spread out evenly, so for 4
-    letters 1 unit goes after letter 2 (Э·в·[extra]·э·л), and for 3 letters
-    the 2 units go after letters 1 and 2 (Э·[extra]·в·[extra]·э). Only a
-    1-2 letter name has too few gaps; then the start and end are used too,
-    and only a 1-letter name ends up with units side by side.
+    Gaps between letters are used first, spread out evenly, so for 3
+    letters 1 unit goes after letter 2 (Э·в·[extra]·э), and for 2 letters
+    the unit goes between them. Only a 1-letter name has too few gaps; then
+    the start and end are used too.
     """
     if n_extra <= 0:
         return []
@@ -237,7 +236,7 @@ def compute_fixed_layout(analyzed):
 
     g = ZONE_W_MM / total_units
     # never let the tallest glyph rise above the top margin
-    tallest_mult = max(size_mult_for(case, kind) for (_, case, _, _, kind) in letters_only)
+    tallest_mult = max(size_mult_for(case, kind) * art.rise for (_, case, art, _, kind) in letters_only)
     g = min(g, (BASELINE_Y_MM - LETTER_TOP_MIN_MM) / tallest_mult)
     gap_mm = GAP_MULT * g
 

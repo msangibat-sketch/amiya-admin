@@ -125,7 +125,7 @@ def build_full_name_reveal(spread_path, name_sequence, out_path, night_letters_d
     g = target_w_mm / units
 
     baseline_y_mm = ZONE_Y0_MM + BASELINE_FRACTION * ZONE_H_MM
-    tallest_mult = UPSIZE_MULT if any(up for _, up in letters) else 1.0
+    tallest_mult = max((UPSIZE_MULT if up else 1.0) * art.rise for art, up in letters) if letters else 1.0
     g = min(g, (baseline_y_mm - ZONE_Y0_MM) / tallest_mult)  # capitals stay inside the zone
     gap_mm = GAP_MULT * g
 

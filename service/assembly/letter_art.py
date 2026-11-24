@@ -8,8 +8,9 @@ bottom. Thread length, canvas size and resolution differ from file to file
 day and night files are trimmed differently. So nothing here sizes by the
 whole image:
 
-  * SIZE is set by the glyph's height -- every lowercase glyph comes out the
-    same height, every capital glyph the same (larger) height.
+  * SIZE is set by the letter's BODY height (see BODY_TRIM) -- every
+    lowercase body comes out the same height, every capital the same
+    (larger) height; ears, tails, б's top, у's tail etc. stick out.
   * SPACING uses the glyph's width, not the image's.
   * The THREAD is extended upward by repeating one of its own pixel rows, so
     it always runs off the top edge of the page however small the letters
@@ -18,6 +19,7 @@ whole image:
 
 import io
 import math
+import os
 from functools import lru_cache
 
 import numpy as np
@@ -28,18 +30,82 @@ THREAD_MAX_FRAC = 0.08  # a row narrower than this share of the image width is t
 GLYPH_RUN_FRAC = 0.01   # glyph starts at the first run of wide rows at least this tall (ignores specks)
 
 
+# ---------------------------------------------------------------------
+# Letter BODY: the part of a letter that has to match every other letter's
+# size. By default the body is the whole glyph. For the letters below it's
+# smaller, so the rest sticks out of the line instead of shrinking the
+# letter:
+#   * б -- the top stroke rises above the other letters
+#   * у, ү, р -- the tail hangs below the line (and д, ц: their feet/hook)
+#   * й, ё -- the mark/dots sit above
+#   * animal extras -- ears, horns, antlers, crests, wings above; feet,
+#     hooves, tails below
+# Each entry: file name (no .png) -> (top, bottom), the share of the glyph's
+# height that is NOT body at the top and at the bottom. Measured by eye from
+# the art (Nov 2026); the day and night files of a letter share one entry.
+# A NEW letter file that has something sticking out needs an entry here.
+BODY_TRIM = {
+    # б: bowl is the body, top stroke rises
+    "b-l-1": (0.37, 0), "b-l-2": (0.36, 0),
+    # р: bowl is the body, stem hangs below
+    "r-l-1": (0.05, 0.40), "r-l-2": (0.13, 0.40),
+    # у: arms are the body, tail hangs below
+    "u-l-1": (0.16, 0.37), "u-l-2": (0.15, 0.34), "u-l-3": (0.03, 0.40),
+    # ү: arms are the body, stem hangs below
+    "w-l-1": (0.15, 0.40), "w-l-2": (0.13, 0.45), "w-l-3": (0.04, 0.48), "w-l-4": (0.03, 0.45),
+    # д, ц: feet / hook hang below
+    "d-l-1": (0.03, 0.17), "d-l-2": (0.22, 0.15),
+    "ts-l-1": (0, 0.18), "ts-l-2": (0.18, 0.08),
+    # й, ё: mark above
+    "iy-l-1": (0.21, 0), "yo-l-1": (0.26, 0),
+    # animal extras
+    "a-l-2": (0.19, 0),            # giraffe horns
+    "g-l-2": (0.10, 0),            # unicorn head
+    "g-l-3": (0.03, 0.10),         # duck feet
+    "k-l-1": (0.18, 0.02),         # koala ears
+    "kh-l-3": (0.19, 0),           # antlers
+    "l-l-1": (0.11, 0.03),         # dragon spikes, tail
+    "m-l-2": (0.13, 0),            # cat ears
+    "n-l-1": (0.03, 0.12),         # duck feet
+    "o-l-1": (0, 0.08),            # penguin feet
+    "o-l-5": (0.16, 0),            # bear ears
+    "p-l-1": (0.08, 0),            # panda ears
+    "q-l-2": (0.30, 0),            # bird head and crest
+    "q-l-3": (0.28, 0),            # skunk tail
+    "s-l-2": (0.20, 0),            # yak horns
+    "sh-l-1": (0.24, 0),           # wings
+    "t-l-2": (0.22, 0),            # bunny ears
+    "yu-l-1": (0.32, 0),           # unicorn horn, ears, mane
+    "z-l-1": (0.14, 0),            # bee wings
+    "z-l-3": (0.05, 0.13),         # fish fins
+    "j-l-1": (0.12, 0),            # antennae
+}
+
+
+def _trim_key(path):
+    name = os.path.splitext(os.path.basename(path))[0]
+    return name[len("letter-"):] if name.startswith("letter-") else name
+
+
 class LetterArt:
     """A letter PNG cropped to its visible pixels, with its glyph and thread measured.
     All measurements are in pixels of `image`."""
 
-    def __init__(self, image, glyph_top, gx0, gx1, has_thread, repeat_row):
+    def __init__(self, image, glyph_top, gx0, gx1, has_thread, repeat_row, trim=(0, 0)):
         self.image = image
         self.w, self.h = image.size
         self.glyph_top = glyph_top          # first row of the glyph (rows above are thread)
         self.gx0, self.gx1 = gx0, gx1       # glyph's left/right edge
         self.glyph_w = gx1 - gx0
         self.glyph_h = self.h - glyph_top
-        self.aspect = self.glyph_w / self.glyph_h   # GLYPH width / GLYPH height
+        # body: the part sized to match other letters (see BODY_TRIM); its
+        # bottom sits on the baseline
+        self.body_top = glyph_top + trim[0] * self.glyph_h
+        self.body_bottom = self.h - trim[1] * self.glyph_h
+        self.body_h = self.body_bottom - self.body_top
+        self.aspect = self.glyph_w / self.body_h    # GLYPH width / BODY height
+        # how far the glyph reaches above the baseline, in body heights (>= 1)
+        self.rise = (self.body_bottom - glyph_top) / self.body_h
         self.has_thread = has_thread
         self.repeat_row = repeat_row        # a clean thread row, repeated to lengthen the thread
 
@@ -76,7 +142,8 @@ def load_letter_art(path):
     has_thread = glyph_top >= run
     # a row a quarter of the way down the thread: clear of a tapered tip at the top
     repeat_row = int(glyph_top * 0.25) if has_thread else 0
-    return LetterArt(im, glyph_top, gx0, gx1, has_thread, repeat_row)
+    return LetterArt(im, glyph_top, gx0, gx1, has_thread, repeat_row,
+                     BODY_TRIM.get(_trim_key(path), (0, 0)))
 
 
 def _insert(page, image, x0_mm, y0_mm, x1_mm, y1_mm, mm_to_pt):
@@ -88,17 +155,20 @@ def _insert(page, image, x0_mm, y0_mm, x1_mm, y1_mm, mm_to_pt):
                       stream=buf.getvalue())
 
 
-def draw_hanging_letter(page, art, x_mm, glyph_h_mm, baseline_y_mm, thread_top_y_mm, mm_to_pt):
-    """Draw `art` so its glyph is `glyph_h_mm` tall, its glyph's left edge at
-    `x_mm` and its bottom on `baseline_y_mm`. If its thread would end below
-    `thread_top_y_mm`, the thread is lengthened to reach it."""
-    mm_per_px = glyph_h_mm / art.glyph_h
+def draw_hanging_letter(page, art, x_mm, body_h_mm, baseline_y_mm, thread_top_y_mm, mm_to_pt):
+    """Draw `art` so its BODY is `body_h_mm` tall, its glyph's left edge at
+    `x_mm` and its body's bottom on `baseline_y_mm` (a tail or feet hang
+    below it). If its thread would end below `thread_top_y_mm`, the thread
+    is lengthened to reach it."""
+    mm_per_px = body_h_mm / art.body_h
     image, img_h = art.image, art.h
+    below_mm = (art.h - art.body_bottom) * mm_per_px   # part hanging under the baseline
+    bottom_y_mm = baseline_y_mm + below_mm
 
-    if art.has_thread and baseline_y_mm - img_h * mm_per_px > thread_top_y_mm:
+    if art.has_thread and bottom_y_mm - img_h * mm_per_px > thread_top_y_mm:
         r = art.repeat_row
         below = art.image.crop((0, r, art.w, art.h))
-        extra = math.ceil((baseline_y_mm - thread_top_y_mm) / mm_per_px) - below.height + 1
+        extra = math.ceil((bottom_y_mm - thread_top_y_mm) / mm_per_px) - below.height + 1
         thread_row = art.image.crop((0, r, art.w, r + 1)).resize((art.w, extra), Image.NEAREST)
         image = Image.new("RGBA", (art.w, extra + below.height))
         image.paste(thread_row, (0, 0))
@@ -107,8 +177,8 @@ def draw_hanging_letter(page, art, x_mm, glyph_h_mm, baseline_y_mm, thread_top_y
 
     left_mm = x_mm - art.gx0 * mm_per_px
     _insert(page, image,
-            left_mm, baseline_y_mm - img_h * mm_per_px,
-            left_mm + art.w * mm_per_px, baseline_y_mm,
+            left_mm, bottom_y_mm - img_h * mm_per_px,
+            left_mm + art.w * mm_per_px, bottom_y_mm,
             mm_to_pt)
 
 

@@ -9,6 +9,8 @@ The rule:
   * The 1st time a letter appears it gets variant 1, the 2nd time variant 2,
     and so on (counted per letter, ignoring case -- "А" and "а" are the
     same animal family, so "Ананд" gets a-1 then a-2).
+  * Exceptions to that order are listed in PREFERRED_ORDER (e.g. a boy's
+    "я" starts with variant 2, then 1).
   * If that variant has no complete art for this gender and case (meet
     spread, give spread in either case, garland letter, night letter,
     caption row), the highest complete variant below it is used; failing
@@ -25,6 +27,14 @@ CYRILLIC_MAP = {
     'И': 'i', 'Й': 'iy', 'К': 'k', 'Л': 'l', 'М': 'm', 'Н': 'n', 'О': 'o', 'Ө': 'q', 'П': 'p',
     'Р': 'r', 'С': 's', 'Т': 't', 'У': 'u', 'Ү': 'w', 'Ф': 'f', 'Х': 'kh', 'Ц': 'ts', 'Ч': 'ch',
     'Ш': 'sh', 'Щ': 'sch', 'Ь': ',', 'Э': 'e', 'Ю': 'yu', 'Я': 'ya',
+}
+
+# (key, gender) -> the variant order to use instead of 1, 2, 3...
+# The 1st time the letter appears it gets the 1st variant listed, and so on;
+# once the list runs out it carries on with the plain count.
+PREFERRED_ORDER = {
+    ("ya", "boy"): [2, 1],
+    ("ya", "girl"): [1, 2],
 }
 
 _inventory_cache = {}
@@ -93,7 +103,8 @@ def pick_variants(name, gender, asset_root, caption_keys):
             unsupported.append(ch)
             continue
         seen[key] = seen.get(key, 0) + 1
-        want = seen[key]
+        order = PREFERRED_ORDER.get((key, gender), [])
+        want = order[seen[key] - 1] if seen[key] <= len(order) else seen[key]
         below = [v for v in options if v <= want]
         variant = below[-1] if below else options[0]
         out.append({"key": key, "case": case, "variant": str(variant)})

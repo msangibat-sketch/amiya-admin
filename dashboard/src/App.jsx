@@ -331,6 +331,41 @@ function buildLetterVariants(tokens, variantValues) {
     });
 }
 
+// Variant numbers that have art for a letter, read from the animal-names
+// list (built from caption_text.xlsx), so new variants show up by
+// themselves once their art is uploaded. Falls back to 1-5 until the list loads.
+function variantOptions(key, animalNames, selected) {
+  const found = Object.keys(animalNames)
+    .filter((k) => k.slice(0, k.lastIndexOf('-')) === key)
+    .map((k) => Number(k.slice(k.lastIndexOf('-') + 1)))
+    .filter((n) => n > 0);
+  const opts = new Set(found.length ? found : [1, 2, 3, 4, 5]);
+  if (selected) opts.add(Number(selected));
+  return [...opts].sort((a, b) => a - b);
+}
+
+// The automatic animal picks for a name (same rule as the website preview,
+// e.g. a boy's я starts with variant 2). Returns one variant number per
+// letter, or null if the service can't answer or a letter has no art.
+async function fetchAutopick(name, gender) {
+  if (!GENERATION_SERVICE_URL || !name.trim()) return null;
+  try {
+    const res = await fetch(`${GENERATION_SERVICE_URL}/autopick`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ child_name: name, gender }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.unsupported && data.unsupported.length) return null;
+    const picks = (data.letter_variants || []).filter((v) => v.key !== '-').map((v) => Number(v.variant) || 1);
+    const nLetters = parseNameTokens(name).filter((t) => t.type === 'letter').length;
+    return picks.length === nLetters ? picks : null;
+  } catch {
+    return null;
+  }
+}
+
 function LetterVariantPicker({ tokens, variants, onChange, animalNames }) {
   const letters = tokens.filter((t) => t.type === 'letter');
   if (!letters.length) return null;
@@ -362,7 +397,7 @@ function LetterVariantPicker({ tokens, variants, onChange, animalNames }) {
                   <td style={{ color: THEME.textSoft }}>{occLabel}</td>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                      {[1, 2, 3, 4, 5].map((v) => (
+                      {variantOptions(t.key, animalNames, variants[i]).map((v) => (
                         <button
                           key={v}
                           type="button"
@@ -416,6 +451,19 @@ function NewOrderForm({ onCreated, onCancel }) {
   const [variantValues, setVariantValues] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+
+  // Pre-fill the variants with the automatic picks (debounced), so they
+  // match the website. Any variant can still be changed by hand afterwards.
+  useEffect(() => {
+    const name = form.child_name;
+    const gender = form.gender;
+    let stale = false;
+    const t = setTimeout(async () => {
+      const picks = await fetchAutopick(name, gender);
+      if (picks && !stale) setVariantValues(picks);
+    }, 500);
+    return () => { stale = true; clearTimeout(t); };
+  }, [form.child_name, form.gender]);
 
   function update(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -737,6 +785,17 @@ function LetterVariantsSection({ order, animalNames, onChanged }) {
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
   const [saveError, setSaveError] = useState(null);
+
+  // No variants saved yet (new name, or an order added without them):
+  // start from the automatic picks instead of all 1s.
+  useEffect(() => {
+    if (initialComplete) return;
+    let cancelled = false;
+    fetchAutopick(order.child_name, order.gender).then((picks) => {
+      if (picks && !cancelled) setVariantValues(picks);
+    });
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!letters.length) return null;
 

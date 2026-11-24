@@ -131,6 +131,13 @@ crash on it.
 5. Both PDFs get uploaded to Supabase Storage, and their public URLs get
    saved back onto the order.
 
+Letters are sized by their **body**, not the whole drawing: б's top stroke,
+the tails of у/ү/р, й/ё marks, and animal ears, horns, wings, feet and tails
+stick out above or below the line instead of shrinking the letter. Which
+part of each letter file is "body" is listed in `BODY_TRIM` in
+`assembly/letter_art.py` -- **a new letter file with something sticking out
+needs a line there**, or it will come out smaller than its neighbours.
+
 Letter accumulation sizing is **computed fresh per page** (not once for
 the whole book) — each give-spread packs however many letters have been
 given so far into a fixed-width zone, so early pages show bigger letters
