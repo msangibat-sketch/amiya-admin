@@ -56,6 +56,7 @@ TAILED_HEIGHT = 1.3
 # the others (e.g. a much chunkier animal). 0.9 = 10% smaller.
 SIZE_TWEAK = {
     "u-l-1": 0.85,   # hippo у -- wide and chunky next to the slim horse у
+    "ts-l-1": 0.85,  # red ц -- blocky, looked bigger than its neighbours
 }
 TAILED = {"u", "w", "r"}
 
