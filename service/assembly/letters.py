@@ -103,7 +103,7 @@ def extra_unit_numbers(spreads_dir, gender):
     return nums
 
 
-def build_extra_unit(spreads_dir, gender, unit_idx, out_dir, page_tag, caption_data, give_side):
+def build_extra_unit(spreads_dir, gender, unit_idx, out_dir, page_tag, caption_data, give_side=None):
     """The meet + give spreads for one extra unit."""
     import os
     nums = extra_unit_numbers(spreads_dir, gender)
@@ -126,13 +126,16 @@ def build_extra_unit(spreads_dir, gender, unit_idx, out_dir, page_tag, caption_d
         doc = fitz.open(os.path.join(spreads_dir, f"spread-{EXTRA_KEY}-{n}-{kind}-{gender}.pdf"))
         page = doc[0]
         normalize_spread(page)
+        # Sun pages have their own text places (clear of the sun):
+        # meet spread -- left page at the bottom, right page at the top;
+        # give spread -- left page at the top.
         if kind == "meet":
             if text("meet_text_left"):
-                insert_caption(page, text("meet_text_left"), "left", color)
+                insert_caption(page, text("meet_text_left"), "left", color, position="bottom")
             if text("meet_text_right"):
                 insert_caption(page, text("meet_text_right"), "right", color)
         elif text("give_text"):
-            insert_caption(page, text("give_text"), give_side, color)
+            insert_caption(page, text("give_text"), "left", color)
         dst = os.path.join(out_dir, f"letter_{page_tag}_extra_{kind}.pdf")
         doc.save(dst)
         doc.close()
@@ -150,6 +153,7 @@ RIGHT_TEXT_X0 = BLEED_MM + PAGE_TRIM_MM + MARGIN_MM
 RIGHT_TEXT_X1 = BLEED_MM + PAGE_TRIM_MM + PAGE_TRIM_MM - MARGIN_MM
 TEXT_TOP_Y0 = BLEED_MM + MARGIN_MM
 TEXT_BOX_H_MM = 40
+TEXT_BOTTOM_Y1 = SPREAD_H_MM - BLEED_MM - MARGIN_MM   # bottom margin, for bottom-placed text
 
 # Night-scene letters: (key, case, variant) -> True. Text goes white, and
 # accumulation letters swap to their white-string variant on these pages.
@@ -289,12 +293,22 @@ def draw_accumulation(page, given_items, full_layout, g, is_night, night_letters
                                 THREAD_TOP_Y_MM, MM_TO_PT)
 
 
-def insert_caption(page, text, side, color=TEXT_COLOR_DAY):
+def insert_caption(page, text, side, color=TEXT_COLOR_DAY, position="top"):
+    """position: "top" (every letter page) or "bottom" -- the last line sits
+    on the bottom margin, same distance from the bottom edge as "top" text
+    is from the top edge."""
     x0 = LEFT_TEXT_X0 if side == "left" else RIGHT_TEXT_X0
     x1 = LEFT_TEXT_X1 if side == "left" else RIGHT_TEXT_X1
     box_w_mm = x1 - x0
-    rect = fitz.Rect(x0 * MM_TO_PT, TEXT_TOP_Y0 * MM_TO_PT,
-                      x1 * MM_TO_PT, (TEXT_TOP_Y0 + TEXT_BOX_H_MM) * MM_TO_PT)
+    if position == "bottom":
+        n_lines = len(text.split("\n"))
+        line_mm = FONT_SIZE * LINEHEIGHT / MM_TO_PT
+        y0_mm = TEXT_BOTTOM_Y1 - n_lines * line_mm
+        rect = fitz.Rect(x0 * MM_TO_PT, y0_mm * MM_TO_PT,
+                          x1 * MM_TO_PT, (y0_mm + TEXT_BOX_H_MM) * MM_TO_PT)
+    else:
+        rect = fitz.Rect(x0 * MM_TO_PT, TEXT_TOP_Y0 * MM_TO_PT,
+                          x1 * MM_TO_PT, (TEXT_TOP_Y0 + TEXT_BOX_H_MM) * MM_TO_PT)
 
     # If any line is wider than the box, PyMuPDF word-wraps it onto an
     # extra visual line -- which can then overflow the box's height
